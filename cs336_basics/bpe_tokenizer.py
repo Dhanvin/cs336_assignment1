@@ -42,7 +42,8 @@ class Utf8PreTokenTokenPairs:
         while idx >= 0:
             if idx in self.invalid_idx_set:
                 idx = idx - 1
-            return (idx, self.token_pairs[idx])
+            else:
+                return (idx, self.token_pairs[idx])
         return None
 
     def get_next_valid(self, seed_idx: int):
@@ -50,7 +51,8 @@ class Utf8PreTokenTokenPairs:
         while idx < len(self.token_pairs):
             if idx in self.invalid_idx_set:
                 idx = idx + 1
-            return (idx, self.token_pairs[idx])
+            else:
+                return (idx, self.token_pairs[idx])
         return None
         
     def token_length(self):
@@ -78,7 +80,7 @@ class TokenPairCorpusMap:
     
     def remove_pretoken_location_from_corpus_map(self, token_pair: TokenPair, pretoken_idx: int, location_idx: int):
         if token_pair in self.token_pair_corpus_info:
-            if location_idx in self.token_pair_corpus_info[token_pair]:
+            if pretoken_idx in self.token_pair_corpus_info[token_pair]:
                 if location_idx in self.token_pair_corpus_info[token_pair][pretoken_idx]:
                     self.token_pair_corpus_info[token_pair][pretoken_idx].remove(location_idx)
                     # If the list for location_key is empty, remove the pretoken_idx
@@ -129,19 +131,19 @@ class BPETokenizer:
         # Update |token_pair_corpus_map|: Find all affected token-pairs adjacent to this token in the pretoken corpus
         # Maintain a set of all token-pairs whose counts will change to adjust max-heap
         changed_token_pairs = set()
-        #changed_token_pairs.add(chosen_token_pair)
+        # NOTE: No need to update token_pair_corpus_map[chosen_token_pair] or 
+        # changed_token_pairs.add(chosen_token_pair) since chosen_token_pair will never appear again during training.
         for pretoken_idx, locations in chosen_token_pair_pretoken_locations.items():
             for location in locations:
                 # Invalidate the current location
                 self.training_corpus[pretoken_idx].set_invalid(location)
-                self.token_pair_corpus_map.remove_pretoken_location_from_corpus_map(chosen_token_pair, pretoken_idx, location)
                 
-                # Find adjacent tokens: TODO: Use soft-deletion to invalidate previous token-pairs that are now merged into a single token.
+                # Find adjacent tokens:
                 adj_next = self.training_corpus[pretoken_idx].get_next_valid(location) # can return None
                 if adj_next is not None:
                     # Update corpus map: Create new token pairs for next token pair
                     next_loc, next_token_pair = adj_next
-                    new_token_pair_next = TokenPair(new_token, next_token_pair[1])
+                    new_token_pair_next = (new_token, next_token_pair[1])
                     self.token_pair_corpus_map.remove_pretoken_location_from_corpus_map(next_token_pair, pretoken_idx, next_loc)
                     self.token_pair_corpus_map.add_pretoken_location_from_corpus_map(new_token_pair_next, pretoken_idx, next_loc)
                     
@@ -154,7 +156,7 @@ class BPETokenizer:
                 if adj_prev is not None:
                     # Update corpus map: Create new token pairs for next token pair
                     prev_loc, prev_token_pair = adj_prev
-                    new_token_pair_prev = TokenPair(prev_token_pair[0], new_token)
+                    new_token_pair_prev = (prev_token_pair[0], new_token)
                     self.token_pair_corpus_map.remove_pretoken_location_from_corpus_map(prev_token_pair, pretoken_idx, prev_loc)
                     self.token_pair_corpus_map.add_pretoken_location_from_corpus_map(new_token_pair_prev, pretoken_idx, prev_loc)
 
@@ -162,8 +164,8 @@ class BPETokenizer:
                     changed_token_pairs.add(prev_token_pair)
                     changed_token_pairs.add(new_token_pair_prev)
         
-        updated_token_pair_counts = {token_pair: self.token_pair_corpus_map.get_token_pair_count(token_pair) for token_pair in changed_token_pairs}
         # Update priority queue
+        updated_token_pair_counts = {token_pair: self.token_pair_corpus_map.get_token_pair_count(token_pair) for token_pair in changed_token_pairs}
         self._update_token_pair_priorities(updated_token_pair_counts)
     
     def tokens(self):
@@ -180,6 +182,5 @@ class BPETokenizer:
         raise NotImplementedError
 
 tokenizer = BPETokenizer(test_string)
-tokenizer.train_one_step()
-breakpoint()
+tokenizer.train()
 print(tokenizer.tokens())
