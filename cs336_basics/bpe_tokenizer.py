@@ -11,9 +11,9 @@
 #   - ? Find trailing subsequences having a very bad compression ratio
 
 import regex as re
-import heapq
 from typing import Dict, Tuple, List
 from modifiable_priority_queue import ModifiablePriorityQueue
+from dataclasses import dataclass
 
 test_string = """ low low low low low
 lower lower widest widest widest
@@ -96,8 +96,64 @@ class TokenPairCorpusMap:
     def get_all_token_pairs(self):
         return self.token_pair_corpus_info.keys()
 
+# Trie for decoding:
+# Given a token vocabulary after training, create a Trie for efficient encoding of an arbitrary byte-string
+class ByteTrieNode:
+    def __init__(self):
+        # A dict {next-byte: ByteTrieNode}
+        self.children: dict = {}
+        self.token: int = None
+
+class TokenTrie:
+    def __init__(self):
+        self._root = ByteTrieNode()
+        self.valid = False
+
+    def build(self, token_vocab: Dict[int, bytes]):
+        for token, byte_string in token_vocab.items():
+            node = self._root
+            # Keep adding nodes if they don't exist already.
+            # At end of the loop, node->root should represent the token byte-string
+            for b in byte_string:
+                # TODO: Might be able to use a default-dict
+                if b not in node.children:
+                    node.children[b] = ByteTrieNode()
+                node = node.children[b]    
+            node.token = token
+
+        self.valid = self._validate()
+
+    def _validate(self):
+        self._validate_children(self._root)
+    
+    def _validate_children(self, start_node: ByteTrieNode):
+        """
+        Due to the nature of the vocabulary, each child-node in the Trie must have
+        """
+        for b, child_node in start_node.children.items():
+            assert child_node.token is not None, "ERROR: " + str(b) + ": Does not have an associated token-id."
+            self._validate_children(child_node)
+        
+    def tokenize(self, search_byte_str:bytes) -> List[int]:
+        # Convert the immutable byte string to a mutable bytearray
+        byte_array = bytearray(search_byte_str)
+        node = self._root
+        tokenized_str = []
+        while byte_array:
+            # Pop the first byte
+            first_byte = byte_array.pop(0)
+            if first_byte in node.children:
+                node = node.children[first_byte]
+            else:
+                # No more matching possible. Return token associated and process remaining string from root
+                assert node.token is not None
+                tokenized_str.append(node.token)
+                node = self._root
+        return tokenized_str
+
+
 # We store Token and counts in a custom heap to control efficiency during modificaitons
-class BPETokenizer:
+class MyBPETokenizer:
     def __init__(self, text_corpus: str):
         # Initilize Utf8PreTokenBytePairs. This is a self-contained representation of the corpus.
         # NOTE: As the token-vocabulary expands during training, some of these idx will become stale (will be marked invalid)
@@ -106,6 +162,7 @@ class BPETokenizer:
         self.token_pair_corpus_map.process_corpus(self.training_corpus)
         self.token_pair_priority_queue = ModifiablePriorityQueue.heapify([(self.token_pair_corpus_map.get_token_pair_count(token_pair), token_pair) for token_pair in self.token_pair_corpus_map.get_all_token_pairs()])
         self.token_vocab: Dict[int, bytes] = {i: bytes([i]) for i in range(256)}
+        self.token_trie = TokenTrie() # Check .valid
 
     def _update_token_pair_priorities(self, updated_token_pair_counts):
         for token_pair, count in updated_token_pair_counts.items():
@@ -118,8 +175,8 @@ class BPETokenizer:
         num_merges = 5
         for i in range(num_merges):
             self.train_one_step()
+        self.token_trie.build(self.token_vocab)
 
-    # TODO: Consider parallelizing the creation of |token_pair_add_dict| and |token_pair_remove_dict| and serializing the udpate
     def train_one_step(self):
         # Pop and extract TokenPairCorpusInfo
         freq_cnt, chosen_token_pair = self.token_pair_priority_queue.pop_task()
@@ -171,16 +228,18 @@ class BPETokenizer:
     def tokens(self):
         return self.token_vocab
 
-    def encode(self):
+    def encode(self, text: str):
         """
         Given a mapping of int --> byte-strings,
         Uses a Trie for efficient lookups of incoming byte-strings to greedily .
         """
-        raise NotImplementedError
+        return self.token_trie.tokenize(text.encode("utf-8"))
     
-    def decode(self):
-        raise NotImplementedError
+    def decode(self, indices: List[int]) -> str:
+        bytes_list = list(map(self.token_vocab.get, indices))
+        text = b"".join(bytes_list).decode("utf-8")
+        return text
 
-tokenizer = BPETokenizer(test_string)
+tokenizer = MyBPETokenizer(test_string)
 tokenizer.train()
 print(tokenizer.tokens())
