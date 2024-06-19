@@ -7,7 +7,7 @@ from typing import IO, BinaryIO, Iterable, Optional, Type
 import numpy.typing as npt
 import torch
 
-
+from cs336_basics.transformer_lm import PositionwiseFeedForward
 def run_positionwise_feedforward(
     d_model: int,
     d_ff: int,
@@ -43,9 +43,14 @@ def run_positionwise_feedforward(
     # You can also manually assign the weights
     # my_ffn.w1.weight.data = weights["w1.weight"]
     # my_ffn.w2.weight.data = weights["w2.weight"]
+
+    my_ffn = PositionwiseFeedForward(d_model, d_ff)
+    my_ffn.load_state_dict(weights)
+    return my_ffn(in_features)
     raise NotImplementedError
 
 
+from cs336_basics.transformer_lm import scaled_dot_product_attention
 def run_scaled_dot_product_attention(
     K: torch.FloatTensor,
     Q: torch.FloatTensor,
@@ -85,9 +90,10 @@ def run_scaled_dot_product_attention(
         with the output of running your scaled dot product attention
         implementation with the provided key, query, and value tensors.
     """
+    return scaled_dot_product_attention(K, Q, V, mask, pdrop)
     raise NotImplementedError
 
-
+from cs336_basics.transformer_lm import MultiheadSelfAttention
 def run_multihead_self_attention(
     d_model: int,
     num_heads: int,
@@ -135,6 +141,9 @@ def run_multihead_self_attention(
         torch.FloatTensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
+    self_attention_layer = MultiheadSelfAttention(d_model, num_heads, attn_pdrop)
+    self_attention_layer.load_state_dict(weights)
+    return self_attention_layer.forward(in_features)
     raise NotImplementedError
 
 
@@ -303,6 +312,7 @@ def run_transformer_lm(
     raise NotImplementedError
 
 
+from cs336_basics.transformer_lm import RmsNorm, gelu_activation
 def run_rmsnorm(
     d_model: int,
     eps: float,
@@ -331,7 +341,10 @@ def run_rmsnorm(
         FloatTensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    rmsnorm = RmsNorm(d_model)
+    rmsnorm.load_state_dict(weights)
+    return rmsnorm.forward(in_features)
+    # raise NotImplementedError
 
 
 def run_gelu(in_features: torch.FloatTensor) -> torch.FloatTensor:
@@ -346,7 +359,7 @@ def run_gelu(in_features: torch.FloatTensor) -> torch.FloatTensor:
         FloatTensor of with the same shape as `in_features` with the output of applying
         GELU to each element.
     """
-    raise NotImplementedError
+    return gelu_activation(in_features)
 
 
 def run_get_batch(
@@ -375,7 +388,7 @@ def run_get_batch(
     """
     raise NotImplementedError
 
-
+from cs336_basics.transformer_lm import softmax
 def run_softmax(in_features: torch.FloatTensor, dim: int) -> torch.FloatTensor:
     """Given a tensor of inputs, return the output of softmaxing the given `dim`
     of the input.
@@ -390,6 +403,7 @@ def run_softmax(in_features: torch.FloatTensor, dim: int) -> torch.FloatTensor:
         FloatTensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
+    return softmax(in_features, dim)
     raise NotImplementedError
 
 

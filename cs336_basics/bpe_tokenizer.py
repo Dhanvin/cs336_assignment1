@@ -10,6 +10,13 @@
 #   - Per sequence, you can compute # unicode chars in sequence / # tokens in sequence 
 #   - ? Find trailing subsequences having a very bad compression ratio
 
+## TODO:
+#     -- Tokenizer should accept user-defined tokens provided to the constructor
+#     -- While encoding a large file /  data stream, we need to break it up into chunks for constant memory, ensuring that pretokens don't cross chunk boundaries
+#     -- Test the tokenizer in test_tokenizer.py and tests/test_train_bpe.py
+#     -- Experiment with tokenizers
+
+
 import regex as re
 from typing import Dict, Tuple, List
 from modifiable_priority_queue import ModifiablePriorityQueue
@@ -59,7 +66,7 @@ class Utf8PreTokenTokenPairs:
         return len(self.token_pairs) - len(self.invalid_idx_set)
 
 TokenizationCorpus = List[Utf8PreTokenTokenPairs]
-# Pretoken-ID --> List of locations in the pre-token
+# {Pretoken-ID: [List of locations in the pre-token]}
 PretokenLocations = Dict[int, List[int]]
 
 from collections import defaultdict
@@ -96,9 +103,9 @@ class TokenPairCorpusMap:
     def get_all_token_pairs(self):
         return self.token_pair_corpus_info.keys()
 
-# Trie for decoding:
-# Given a token vocabulary after training, create a Trie for efficient encoding of an arbitrary byte-string
+# TokenTrie for efficient encoding of an arbitrary byte-string given a token vocabulary after training
 class ByteTrieNode:
+    # Ensure that each instance gets a separate dict.
     def __init__(self):
         # A dict {next-byte: ByteTrieNode}
         self.children: dict = {}
@@ -134,9 +141,9 @@ class TokenTrie:
             assert child_node.token is not None, "ERROR: " + str(b) + ": Does not have an associated token-id."
             self._validate_children(child_node)
         
-    def tokenize(self, search_byte_str:bytes) -> List[int]:
+    def tokenize(self, input_byte_str:bytes) -> List[int]:
         # Convert the immutable byte string to a mutable bytearray
-        byte_array = bytearray(search_byte_str)
+        byte_array = bytearray(input_byte_str)
         node = self._root
         tokenized_str = []
         while byte_array:
