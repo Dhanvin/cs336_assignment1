@@ -93,7 +93,7 @@ def run_scaled_dot_product_attention(
     return scaled_dot_product_attention(K, Q, V, mask, pdrop)
     raise NotImplementedError
 
-from cs336_basics.transformer_lm import MultiheadSelfAttention
+from cs336_basics.transformer_lm import CausalMultiheadSelfAttention
 def run_multihead_self_attention(
     d_model: int,
     num_heads: int,
@@ -141,11 +141,30 @@ def run_multihead_self_attention(
         torch.FloatTensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    self_attention_layer = MultiheadSelfAttention(d_model, num_heads, attn_pdrop)
+    self_attention_layer = CausalMultiheadSelfAttention(d_model, num_heads, attn_pdrop)
     self_attention_layer.load_state_dict(weights)
     return self_attention_layer.forward(in_features)
     raise NotImplementedError
 
+from cs336_basics.transformer_lm import TransformerLayer
+
+def modify_state_dict_for_multihead_transformer_layer(d_model: int, num_heads: int, 
+                                                      weights: dict[str, torch.FloatTensor], 
+                                                      layer_prefix: str = ''):
+    split_size = int(d_model / num_heads) # Each split should have |split_size|
+    split_weights_v = torch.split(weights[f'{layer_prefix}attn.v_proj.weight'], split_size, dim=0)
+    split_weights_q = torch.split(weights[f'{layer_prefix}attn.q_proj.weight'], split_size, dim=0)
+    split_weights_k = torch.split(weights[f'{layer_prefix}attn.k_proj.weight'], split_size, dim=0)
+    assert len(split_weights_v)==num_heads and len(split_weights_q)==num_heads and len(split_weights_k)==num_heads, "ERROR: Cannot split concatenated weights"
+    for i in range(num_heads):
+        weights[f'{layer_prefix}attn.v_heads.{i}.weight'] = split_weights_v[i]
+        weights[f'{layer_prefix}attn.q_heads.{i}.weight'] = split_weights_q[i]
+        weights[f'{layer_prefix}attn.k_heads.{i}.weight'] = split_weights_k[i]
+    # Remove the concatenated weight entry
+    del weights[f'{layer_prefix}attn.q_proj.weight']
+    del weights[f'{layer_prefix}attn.k_proj.weight']
+    del weights[f'{layer_prefix}attn.v_proj.weight']
+    return weights
 
 def run_transformer_block(
     d_model: int,
@@ -216,9 +235,13 @@ def run_transformer_block(
         FloatTensor of shape (batch_size, sequence_length, d_model) with the output of
         running the Transformer block on the input features.
     """
+    transformer_block = TransformerLayer(d_model, num_heads, d_ff, attn_pdrop, residual_pdrop)
+    modify_state_dict_for_multihead_transformer_layer(d_model, num_heads, weights)
+    transformer_block.load_state_dict(weights)
+    return transformer_block.forward(in_features)
     raise NotImplementedError
 
-
+from cs336_basics.transformer_lm import TransformerModel
 def run_transformer_lm(
     vocab_size: int,
     context_length: int,
@@ -300,7 +323,7 @@ def run_transformer_lm(
                 Shape is (d_model, ).
             - `lm_head.weight`
                 Weights of the language model output embedding.
-                Shape is (vocab_size, d_model).
+                Shape is (d_model, vocab_size).
         in_indices: torch.LongTensor
             Tensor with input indices to run the language model on. Shape is (batch_size, sequence_length), where
             `sequence_length` is at most `context_length`.
@@ -309,6 +332,11 @@ def run_transformer_lm(
         FloatTensor of shape (batch size, sequence_length, vocab_size) with the predicted unnormalized
         next-word distribution for each token.
     """
+    transformer_model = TransformerModel(vocab_size, context_length, num_layers, d_model, num_heads, d_ff, attn_pdrop, residual_pdrop)
+    for i in range(num_layers):
+        modify_state_dict_for_multihead_transformer_layer(d_model, num_heads, weights, f'layers.{i}.')
+    transformer_model.load_state_dict(weights)
+    return transformer_model.forward(in_indices)
     raise NotImplementedError
 
 
