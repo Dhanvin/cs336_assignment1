@@ -194,7 +194,8 @@ class TransformerModel(nn.Module):
         # ? Why are we returning unnormalized? Is it because of X-entropy loss?
         return self.lm_head(self.ln_final(x))
 
-# FLOPS Accounting:
+############### Accounting for Memory, FLOPs ########################
+# FLOPS Accounting, :
 # Assumptions:
 #   Input: (B: batch_size, L: seq_len)
 #   Embeddings size: E (128 in this case)
@@ -250,10 +251,9 @@ class TransformerModelConfiguration:
     context_length: int
     embedding_length: int # d_model
     
-def flops_accounting(conf: TransformerModelConfiguration):
+def flops_accounting_fpass(conf: TransformerModelConfiguration):
     """
-    Prints a breakdown of FLOPs accounting
-   
+    Prints a breakdown of FLOPs accounting per batch element
     """
     # Assumptions:
     #   Assume FFN is a 4x position-wise: Weight matrix is 
@@ -291,10 +291,117 @@ def flops_accounting(conf: TransformerModelConfiguration):
     }
     yaml_string = yaml.dump(flops_fpass, default_flow_style=False)
     print(yaml_string)
+    return flops_fpass_total
+
+def params_accounting(conf: TransformerModelConfiguration):
+    params_fnn = 8 * conf.embedding_length * conf.embedding_length
+    params_self_attention = 4 * conf.embedding_length * conf.embedding_length
+    params_encode_decode = conf.embedding_length * conf.vocab_size
+    params_total = conf.num_layers * (params_fnn + params_self_attention) + params_encode_decode
+    params_model = {
+        'Model': conf.name,
+        'Params': f"{params_total: .1e} (100%)",
+        'breakdown' : {
+            'FNN': f"{conf.num_layers * params_fnn: .1e} ({conf.num_layers * params_fnn / params_total *100: .1f}%)",
+            f'transform_layers ({conf.num_layers} layers)': f"{conf.num_layers * params_self_attention: .1e} ({conf.num_layers * params_self_attention / params_total *100: .1f}%)",
+            'decoding': f"{params_encode_decode: .1e} ({params_encode_decode / params_total *100: .1f}%)",
+        },
+    }
+    yaml_string = yaml.dump(params_model, default_flow_style=False)
+    print(yaml_string)
+    return params_total
 
 
-    # Do the same for memory
-    # params_fnn = 8* E^2
-    # params_project_kqv = 3* E^2
-    # params_combine_attentions = E^2
-    # params_vocab_prob = 
+
+def activations_accounting(conf: TransformerModelConfiguration):
+#  
+# - activations (A) per batch B: 
+#      -  Transformer block 
+#           – RMSNorm(s): 2*L*E
+#           – Multi-head self-attention sublayer: 
+#               - QKV projections: L*E
+#               - QKT matrix multiply: L*L
+#               - softmax: L*E
+#               - weighted sum of values: L*E
+#               - output projection: L*E
+#           – Position-wise 
+#               - feed-forward: W1 matrix multiply: L*4E
+#               - GELU: L*4E
+#               - W2 matrix multiply: L*E 
+#       - final RMSNorm: L*E
+#       - Output embedding: L*V
+#       - Cross-entropy on logits: : L*V
+#   Total A = 15*B*L*E*N + 2*B*N*L*L + 2*B*L*V + B*L*E
+    actv_transformer = 12 * conf.context_length * conf.embedding_length + 2 * conf.context_length * conf.context_length
+    actv_transformer_all = conf.num_layers * actv_transformer
+    actv_output_norm = conf.vocab_size * conf.context_length + conf.embedding_length * conf.context_length
+    actv_output_loss = conf.vocab_size * conf.context_length
+    actv_total = actv_transformer_all + actv_output_norm + actv_output_loss
+    actv_model = {
+        'Model': conf.name,
+        'Params': f"{actv_total: .1e} (100%)",
+        'breakdown' : {
+            'Transformer-block': f"{actv_transformer_all: .1e} ({actv_transformer_all / actv_total *100: .1f}%)",
+            'Output-Predictions': f"{actv_output_norm: .1e} ({actv_output_norm / actv_total *100: .1f}%)",
+            'Loss': f"{actv_output_loss: .1e} ({actv_output_loss / actv_total *100: .1f}%)",
+        },
+    }
+    yaml_string = yaml.dump(actv_model, default_flow_style=False)
+    print(yaml_string)
+    return actv_total
+
+def model_training_memory_load(conf: TransformerModelConfiguration, batch_size: int):
+    # - gradients (params and activations) = (A + P)
+    # - optimizer state = 2 * P
+    n_activations = activations_accounting(conf) * batch_size 
+    n_params = params_accounting(conf)
+    total_floats = 3 * n_activations + 2 * n_params
+    backprop_memory_model = {
+        'Model': conf.name,
+        'Total Mem (GB)': total_floats * 4 / 1.024e9,
+        'Params': f"{n_params: .1e} ({n_params / total_floats *100: .1f}%)" ,
+        'Activations': f"{n_activations: .1e} ({n_activations / total_floats *100: .1f}%)",
+        'Gradients': f"{n_params + n_activations: .1e} ({(n_params + n_activations) / total_floats *100: .1f}%)",
+        'Optimizer State': f"{2 * n_params: .1e} ({2 * n_params / total_floats *100: .1f}%)",
+    }
+    yaml_string = yaml.dump(backprop_memory_model, default_flow_style=False)
+    print(yaml_string)
+    return total_floats * 4 # assume single-precision
+
+def model_training_flops(conf: TransformerModelConfiguration, batch_size: int, training_steps: int):
+    fpass_flops = flops_accounting_fpass(conf) * batch_size
+    bpass_flops = 2 * fpass_flops
+    gradient_update_flops = params_accounting(conf) * 3
+    training_flops = training_steps * (fpass_flops + bpass_flops + gradient_update_flops)
+
+    training_flops_model = {
+        'Model': conf.name,
+        'Total': f"{training_flops: .1e}",
+        'Gradient-Compute-Per-Step': f"{fpass_flops + bpass_flops: .1e}" ,
+        'Param-Update-Per-Step': f"{gradient_update_flops: .1e}",
+    }
+    yaml_string = yaml.dump(training_flops_model, default_flow_style=False)
+    print(yaml_string)
+    return training_flops
+
+# CS336 assignment 1: adamwAccounting
+def adamwAccounting():
+    gpt2_xl_conf = TransformerModelConfiguration(
+        name="GPT-2 XL", 
+        vocab_size=50257,
+        num_layers=48,
+        context_length=1024,
+        embedding_length=1600,
+    )
+    # mylib.flops_accounting(gpt2_xl_conf)
+    # mylib.model_training_memory_load(gpt2_xl_conf, 4)
+
+    nflops = mylib.model_training_flops(gpt2_xl_conf, batch_size=1024, training_steps=400000)
+    ns_per_day = 60. * 60. * 24.
+    flops_s_per_a100_sp = 19.5e12
+    model_utilization = 0.5
+    flops_per_day = flops_s_per_a100_sp * ns_per_day * model_utilization
+    ndays = nflops / flops_per_day
+    print(f"{ndays: .1e} days for training {gpt2_xl_conf.name}!")
+
+
