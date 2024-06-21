@@ -250,18 +250,6 @@ class TransformerModel(nn.Module):
 
 
 ############### Accounting for Memory, FLOPs ########################
-# FLOPS Accounting, :
-# Assumptions:
-#   Input: (B: batch_size, L: seq_len)
-#   Embeddings size: E (128 in this case)
-#   Assume FFN is a 4x position-wise: Weight matrix is
-#   Num-Heads = H
-#   Key / Query / Value size: E/H
-#   Vocabulary Size (# Tokens) = V
-#   Num Transformer Blocks = N
-#
-
-
 from dataclasses import dataclass
 import yaml
 

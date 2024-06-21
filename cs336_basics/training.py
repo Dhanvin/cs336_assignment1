@@ -96,11 +96,12 @@ class AdamW(torch.optim.Optimizer):
             weight_decay = group["weight_decay"]
             betas = group["betas"]
             eps = group["eps"]
+            print(f'# params: {len(group["params"])}')
             for p in group["params"]:
                 if p.grad is None:
                     continue
                 # Useful construct provided by base-class to store param specific state
-                state = self.state["p"]
+                state = self.state[p]
 
                 # Update state based on gradient
                 m = state.get("m", torch.zeros(p.data.shape))
@@ -122,7 +123,6 @@ class AdamW(torch.optim.Optimizer):
                     adjusted_lr * state["m"] / (torch.sqrt(state["v"]) + eps)
                 )  # in-place update based on gradient accumulation
                 p.data -= lr * weight_decay * p.data  # in-place weight decay update
-
                 state["t"] = t + 1
 
         return loss
@@ -253,7 +253,8 @@ def get_batch(
 
 
 ### Checkpointing
-
+# str, os.PathLike: string or bytes object representing a file system path
+# BinaryIO | IO[bytes]: binary file-like object 
 
 def save_checkpoint(
     model: torch.nn.Module,
@@ -275,7 +276,12 @@ def save_checkpoint(
         out: str | os.PathLike | BinaryIO | IO[bytes]
             Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-
+    obj = {
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(), # Same as optimizer.state_dict() 
+        "niter": iteration,
+    }
+    torch.save(obj, out)
 
 def load_checkpoint(
     src: str | os.PathLike | BinaryIO | IO[bytes],
@@ -298,4 +304,8 @@ def load_checkpoint(
     Returns:
         int, the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    obj = torch.load(src)
+    model.load_state_dict(obj['model_state'])
+    optimizer.load_state_dict(obj['optimizer_state'])
+    return obj['niter']
+    
