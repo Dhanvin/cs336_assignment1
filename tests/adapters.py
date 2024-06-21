@@ -389,7 +389,8 @@ def run_gelu(in_features: torch.FloatTensor) -> torch.FloatTensor:
     """
     return gelu_activation(in_features)
 
-
+from cs336_basics.training import get_batch
+import numpy as np
 def run_get_batch(
     dataset: npt.NDArray, batch_size: int, context_length: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -414,6 +415,8 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
+    # Set constant seed to make results predictable
+    return get_batch(dataset, batch_size, context_length, device)
     raise NotImplementedError
 
 from cs336_basics.transformer_lm import softmax
@@ -453,7 +456,7 @@ def run_cross_entropy(inputs: torch.FloatTensor, targets: torch.LongTensor):
     return cross_entropy_loss(inputs, targets)
     raise NotImplementedError
 
-
+from cs336_basics.training import gradient_clipping
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float):
     """Given a set of parameters, clip their combined gradients to have l2 norm at most max_l2_norm.
 
@@ -466,7 +469,7 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
     Returns:
         None
     """
-    raise NotImplementedError
+    gradient_clipping(parameters, max_l2_norm)
 
 from cs336_basics.training import AdamW
 def get_adamw_cls() -> Type[torch.optim.Optimizer]:
@@ -477,6 +480,7 @@ def get_adamw_cls() -> Type[torch.optim.Optimizer]:
     raise NotImplementedError
 
 
+from cs336_basics.training import lr_cosine_scheduling
 def run_get_lr_cosine_schedule(
     it: int,
     max_learning_rate: float,
@@ -507,6 +511,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
+    return lr_cosine_scheduling(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
     raise NotImplementedError
 
 
