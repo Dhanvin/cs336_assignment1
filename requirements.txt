@@ -3,3 +3,4 @@ torch==2.2.1
 numpy
 pyyaml
 black # for lint-fixes: PEP 8 guideline adherance
+wandb # Use weights and biases service

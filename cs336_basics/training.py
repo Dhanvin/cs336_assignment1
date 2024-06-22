@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+
 import numpy as np
 import math
 from typing import Optional, IO, BinaryIO
@@ -89,7 +90,6 @@ class AdamW(torch.optim.Optimizer):
 
     def step(self, closure: Optional[Callable] = None):
         loss = None if closure is None else closure()
-
         for group in self.param_groups:
             # Useful construct provided by base-class to store group specific state
             lr = group["lr"]
@@ -169,6 +169,26 @@ def lr_cosine_scheduling(
         1.0 + math.cos(frac_it * math.pi)
     )  #
     return cosine_oscillation
+
+
+# NOTE: Choosing not to use this because it feels like an unnecessary abstraction for this assignment.
+#       If we create such a class, we also need to store state during checkpointing
+# class CosineAnealingScheduler(_LRScheduler):
+#     def __init__(self, optimizer, max_learning_rate: float,
+#     min_learning_rate: float,
+#     warmup_iters: int,
+#     cosine_cycle_iters: int):
+#         self.max_learning_rate = max_learning_rate
+#         self.min_learning_rate = min_learning_rate
+#         self.warmup_iters = warmup_iters
+#         self.cosine_cycle_iters = cosine_cycle_iters
+#         super().__init__(optimizer)
+
+#     def get_lr(self):
+#         return lr_cosine_scheduling(self.last_epoch + 1,
+#                                     self.max_learning_rate,
+#                                     self.min_learning_rate,
+#                                     self.warmup_iters, self.cosine_cycle_iters)
 
 
 def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float):
@@ -254,7 +274,8 @@ def get_batch(
 
 ### Checkpointing
 # str, os.PathLike: string or bytes object representing a file system path
-# BinaryIO | IO[bytes]: binary file-like object 
+# BinaryIO | IO[bytes]: binary file-like object
+
 
 def save_checkpoint(
     model: torch.nn.Module,
@@ -278,10 +299,11 @@ def save_checkpoint(
     """
     obj = {
         "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(), # Same as optimizer.state_dict() 
+        "optimizer_state": optimizer.state_dict(),  # Same as optimizer.state_dict()
         "niter": iteration,
     }
     torch.save(obj, out)
+
 
 def load_checkpoint(
     src: str | os.PathLike | BinaryIO | IO[bytes],
@@ -305,7 +327,6 @@ def load_checkpoint(
         int, the previously-serialized number of iterations.
     """
     obj = torch.load(src)
-    model.load_state_dict(obj['model_state'])
-    optimizer.load_state_dict(obj['optimizer_state'])
-    return obj['niter']
-    
+    model.load_state_dict(obj["model_state"])
+    optimizer.load_state_dict(obj["optimizer_state"])
+    return obj["niter"]

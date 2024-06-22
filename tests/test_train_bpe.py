@@ -5,6 +5,8 @@ import time
 from .adapters import run_train_bpe
 from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
+import cProfile
+import pstats
 
 def test_train_bpe_speed():
     """
@@ -15,6 +17,7 @@ def test_train_bpe_speed():
     takes around 3 seconds.
     """
     input_path = FIXTURES_PATH / "corpus.en"
+    # Enable profiling
     start_time = time.time()
     _, _ = run_train_bpe(
         input_path=input_path,
@@ -23,6 +26,19 @@ def test_train_bpe_speed():
     )
     end_time = time.time()
     assert end_time - start_time < 1.5
+    
+    # Profile |run_train_bpe|
+    profiler = cProfile.Profile()
+    profiler.enable()
+    _, _ = run_train_bpe(
+            input_path=input_path,
+            vocab_size=500,
+            special_tokens=["<|endoftext|>"],
+        )
+    profiler.disable()
+    # Print the profiling results
+    stats = pstats.Stats(profiler)
+    stats.sort_stats('time').print_stats(10)
 
 
 def test_train_bpe():
@@ -48,6 +64,7 @@ def test_train_bpe():
             )
             for merge_token_1, merge_token_2 in gpt2_reference_merges
         ]
+    # breakpoint()
     assert merges == reference_merges
 
     # Compare the vocab to the expected output vocab

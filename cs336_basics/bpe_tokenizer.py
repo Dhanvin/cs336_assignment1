@@ -19,12 +19,8 @@
 
 import regex as re
 from typing import Dict, Tuple, List
-from modifiable_priority_queue import ModifiablePriorityQueue
+from .modifiable_priority_queue import ModifiablePriorityQueue
 from dataclasses import dataclass
-
-test_string = """ low low low low low
-lower lower widest widest widest
-newest newest newest newest newest newest"""
 
 PRETOKEN_PATTERN = (
     r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -32,6 +28,17 @@ PRETOKEN_PATTERN = (
 # list(pretokens_utf8_seq[0]) would be the list of integers. At this point, each pretoken is in the |token_vocab|
 
 TokenPair = Tuple[int, int]
+
+
+def token_seq_to_bytes(
+    token_seq: List[int] | TokenPair, token_vocab: Dict[int, bytes]
+) -> bytes:
+    bytes_list = list(map(token_vocab.get, token_seq))
+    return b"".join(bytes_list)
+
+
+def decode(token_seq: List[int] | TokenPair, token_vocab: Dict[int, bytes]) -> str:
+    return token_seq_to_bytes(token_seq, token_vocab).decode("utf-8")
 
 
 # Index in pretoken --> (Token Pair)
@@ -92,11 +99,11 @@ class TokenPairCorpusMap:
             for location_idx, token_pair in pretoken_token_pairs.token_pairs.items():
                 # Since this function should be called before training, none of the locations should be invalid
                 assert location_idx not in pretoken_token_pairs.invalid_idx_set
-                self.add_pretoken_location_from_corpus_map(
+                self.add_pretoken_location_to_corpus_map(
                     token_pair, pretoken_idx, location_idx
                 )
 
-    def add_pretoken_location_from_corpus_map(
+    def add_pretoken_location_to_corpus_map(
         self, token_pair: TokenPair, pretoken_idx: int, location_idx: int
     ):
         self.token_pair_corpus_info[token_pair][pretoken_idx].append(location_idx)
@@ -139,13 +146,14 @@ class ByteTrieNode:
         self.token: int = None
 
 
-class TokenTrie:
-    def __init__(self):
+class TokenTrieEncoderDecoder:
+    def __init__(self, token_vocab: Dict[int, bytes]):
         self._root = ByteTrieNode()
         self.valid = False
+        self.token_vocab = token_vocab
 
-    def build(self, token_vocab: Dict[int, bytes]):
-        for token, byte_string in token_vocab.items():
+    def build(self):
+        for token, byte_string in self.token_vocab.items():
             node = self._root
             # Keep adding nodes if they don't exist already.
             # At end of the loop, node->root should represent the token byte-string
@@ -188,10 +196,22 @@ class TokenTrie:
                 node = self._root
         return tokenized_str
 
+    def encode(self, text: str):
+        """
+        Given a mapping of int --> byte-strings,
+        Uses a Trie for efficient lookups of incoming byte-strings to greedily .
+        """
+        assert self.valid, "Error: Trie is invalid."
+        return self.tokenize(text.encode("utf-8"))
+
 
 # We store Token and counts in a custom heap to control efficiency during modificaitons
 class MyBPETokenizer:
-    def __init__(self, text_corpus: str):
+    # Use if True, uses heap to find max-freq token-pair
+    # if False, computes maximal element in token_pair_corpus_map directly
+    USE_HEAP = False  # NOTE: Currently doesn't support lexicographic ordering...
+
+    def __init__(self, text_corpus: str, special_tokens: List[str] = []):
         # Initilize Utf8PreTokenBytePairs. This is a self-contained representation of the corpus.
         # NOTE: As the token-vocabulary expands during training, some of these idx will become stale (will be marked invalid)
         self.training_corpus: TokenizationCorpus = [
@@ -209,8 +229,34 @@ class MyBPETokenizer:
                 for token_pair in self.token_pair_corpus_map.get_all_token_pairs()
             ]
         )
+
+        # Initialize special tokens before all others
         self.token_vocab: Dict[int, bytes] = {i: bytes([i]) for i in range(256)}
-        self.token_trie = TokenTrie()  # Check .valid
+        self.special_tokens = special_tokens
+
+        # merges: list[tuple[bytes, bytes]]
+        #      BPE merges. Each list item is a tuple of bytes (<token1>, <token2>),
+        #      representing that <token1> was merged with <token2>.
+        #      Merges are ordered by order of creation.
+        self.merges = []
+
+    def get_merges(self) -> List[Tuple]:
+        return self.merges
+
+    def add_special_tokens_to_vocab(self):
+        # Add special tokens
+        len_vocab_no_special = len(self.token_vocab)
+        for idx, sp_token in enumerate(self.special_tokens):
+            self.token_vocab[len_vocab_no_special + idx] = sp_token  # No need to encode
+
+    def get_vocab(self) -> Dict[int, bytes]:
+        # vocab: dict[int, bytes]
+        #       The trained tokenizer vocabulary, a mapping from int (token ID in the vocabulary)
+        #       to bytes (token bytes)
+        return self.token_vocab
+
+    def vocab_size(self) -> int:
+        return len(self.token_vocab)
 
     def _update_token_pair_priorities(self, updated_token_pair_counts):
         for token_pair, count in updated_token_pair_counts.items():
@@ -219,23 +265,38 @@ class MyBPETokenizer:
             else:
                 self.token_pair_priority_queue.add_task(token_pair, count)
 
-    def train(self):
-        num_merges = 5
+    def train(self, num_merges: int):
         for i in range(num_merges):
             self.train_one_step()
-        self.token_trie.build(self.token_vocab)
 
     def train_one_step(self):
         # Pop and extract TokenPairCorpusInfo
-        freq_cnt, chosen_token_pair = self.token_pair_priority_queue.pop_task()
+        if self.USE_HEAP:
+            freq_cnt, chosen_token_pair = self.token_pair_priority_queue.pop_task()
+        else:
+            # !! Trying Alternative: You could find max from the dictionary itself (more compute)
+            chosen_token_pair = max(
+                self.token_pair_corpus_map.token_pair_corpus_info,
+                key=lambda k: (
+                    self.token_pair_corpus_map.get_token_pair_count(k),
+                    token_seq_to_bytes(k, self.token_vocab),
+                ),
+            )
+            freq_cnt = self.token_pair_corpus_map.get_token_pair_count(
+                chosen_token_pair
+            )
+
+        print(f"Merging {chosen_token_pair} with freq: {freq_cnt}")
+
         chosen_token_pair_pretoken_locations: PretokenLocations = (
             self.token_pair_corpus_map.token_pair_corpus_info[chosen_token_pair]
         )
+
         # Create a new token (increment token-vocab size) representing the token_pair, concatenating bytes from associated existing tokens
         new_token = len(self.token_vocab)
-        self.token_vocab[new_token] = b"".join(
-            list(map(self.token_vocab.get, chosen_token_pair))
-        )
+        new_merged_bytestring_pair = tuple(map(self.token_vocab.get, chosen_token_pair))
+        self.merges.append(new_merged_bytestring_pair)
+        self.token_vocab[new_token] = b"".join(new_merged_bytestring_pair)
 
         # Update |token_pair_corpus_map|: Find all affected token-pairs adjacent to this token in the pretoken corpus
         # Maintain a set of all token-pairs whose counts will change to adjust max-heap
@@ -243,6 +304,7 @@ class MyBPETokenizer:
         # NOTE: No need to update token_pair_corpus_map[chosen_token_pair] or
         # changed_token_pairs.add(chosen_token_pair) since chosen_token_pair will never appear again during training.
         for pretoken_idx, locations in chosen_token_pair_pretoken_locations.items():
+            # print(f'{new_merged_bytestring_pair} present in {len(locations)} locations in pretoken #{pretoken_idx}.')
             for location in locations:
                 # Invalidate the current location
                 self.training_corpus[pretoken_idx].set_invalid(location)
@@ -258,7 +320,7 @@ class MyBPETokenizer:
                     self.token_pair_corpus_map.remove_pretoken_location_from_corpus_map(
                         next_token_pair, pretoken_idx, next_loc
                     )
-                    self.token_pair_corpus_map.add_pretoken_location_from_corpus_map(
+                    self.token_pair_corpus_map.add_pretoken_location_to_corpus_map(
                         new_token_pair_next, pretoken_idx, next_loc
                     )
 
@@ -276,7 +338,7 @@ class MyBPETokenizer:
                     self.token_pair_corpus_map.remove_pretoken_location_from_corpus_map(
                         prev_token_pair, pretoken_idx, prev_loc
                     )
-                    self.token_pair_corpus_map.add_pretoken_location_from_corpus_map(
+                    self.token_pair_corpus_map.add_pretoken_location_to_corpus_map(
                         new_token_pair_prev, pretoken_idx, prev_loc
                     )
 
@@ -284,29 +346,50 @@ class MyBPETokenizer:
                     changed_token_pairs.add(prev_token_pair)
                     changed_token_pairs.add(new_token_pair_prev)
 
+        # !! Trying Alternative:  Remove from dict
+        del self.token_pair_corpus_map.token_pair_corpus_info[chosen_token_pair]
+        print("Changed tokens:")
+        for changed_tk in changed_token_pairs:
+            print(
+                f"{changed_tk}: {self.token_pair_corpus_map.get_token_pair_count(changed_tk)} occurrances"
+            )
+
         # Update priority queue
-        updated_token_pair_counts = {
-            token_pair: self.token_pair_corpus_map.get_token_pair_count(token_pair)
-            for token_pair in changed_token_pairs
-        }
-        self._update_token_pair_priorities(updated_token_pair_counts)
-
-    def tokens(self):
-        return self.token_vocab
-
-    def encode(self, text: str):
-        """
-        Given a mapping of int --> byte-strings,
-        Uses a Trie for efficient lookups of incoming byte-strings to greedily .
-        """
-        return self.token_trie.tokenize(text.encode("utf-8"))
-
-    def decode(self, indices: List[int]) -> str:
-        bytes_list = list(map(self.token_vocab.get, indices))
-        text = b"".join(bytes_list).decode("utf-8")
-        return text
+        if self.USE_HEAP:
+            updated_token_pair_counts = {
+                token_pair: self.token_pair_corpus_map.get_token_pair_count(token_pair)
+                for token_pair in changed_token_pairs
+            }
+            self._update_token_pair_priorities(updated_token_pair_counts)
 
 
-tokenizer = MyBPETokenizer(test_string)
-tokenizer.train()
-print(tokenizer.tokens())
+def train_bpe(input_str: str, vocab_size: int, special_tokens: List[str] = []):
+    tokenizer = MyBPETokenizer(input_str, special_tokens)
+    num_merges = vocab_size - tokenizer.vocab_size()
+    tokenizer.train(num_merges)
+    tokenizer.add_special_tokens_to_vocab()
+    return (tokenizer.get_vocab(), tokenizer.get_merges())
+
+
+def train_bpe_from_file(
+    input_path: str, vocab_size: int, special_tokens: List[str] = []
+):
+    try:
+        with open(input_path, "r") as file:
+            file_content = file.read()
+        return train_bpe(file_content, vocab_size, special_tokens)
+
+    except FileNotFoundError:
+        print(f"The file {input_path} does not exist.")
+
+
+# python -m cs336_basics.bpe_tokenizer
+if __name__ == "__main__":
+
+    test_string = """ low low low low low
+    lower lower widest widest widest
+    newest newest newest newest newest newest"""
+
+    vocab, merges = train_bpe(test_string, 264)
+    print(f"Vocab: {vocab}\n------\n")
+    print(f"Merges: {merges}")
