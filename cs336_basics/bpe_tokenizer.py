@@ -224,6 +224,7 @@ class MyBPETokenizer:
             [
                 (
                     self.token_pair_corpus_map.get_token_pair_count(token_pair),
+                    token_seq_to_bytes(token_pair),
                     token_pair,
                 )
                 for token_pair in self.token_pair_corpus_map.get_all_token_pairs()
@@ -261,7 +262,10 @@ class MyBPETokenizer:
     def _update_token_pair_priorities(self, updated_token_pair_counts):
         for token_pair, count in updated_token_pair_counts.items():
             if self.token_pair_priority_queue.contains(token_pair):
-                self.token_pair_priority_queue.change_priority(token_pair, count)
+                self.token_pair_priority_queue.change_priority(
+                    token_pair,
+                    (count, token_seq_to_bytes(token_pair, self.token_vocab)),
+                )
             else:
                 self.token_pair_priority_queue.add_task(token_pair, count)
 

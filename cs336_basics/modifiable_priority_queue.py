@@ -18,15 +18,20 @@ def _right_child_idx(pos: int):
 class ModifiablePriorityQueue:  # Min-Heap: Lower priority is better
     """
     Assumes that newly added nodes have low count (low priority)
+    Allows adding Tuples, where all but the last element determine the priority and
+    the last element references the item
     """
 
-    def __init__(self):
-        self._heap: List[Tuple(int, Any)] = (
+    def __init__(self, tuple_size: int):
+        self._heap: List[Tuple[int, bytes, Any]] = (
             []
         )  # Initialize an empty list to serve as the heap
         self._item_finder: Dict[Any:int] = (
             {}
         )  # Dictionary to keep track of task positions in the heap
+
+        # The idx into the tuple in _heap corresponding to the item in item-finder
+        self.item_idx = tuple_size - 1
 
     def contains(self, task):
         return task in self._item_finder
@@ -46,10 +51,14 @@ class ModifiablePriorityQueue:  # Min-Heap: Lower priority is better
                 break
             # Move parent down the heap
             self._heap[pos] = parent
-            self._item_finder[parent[1]] = pos  # Update item finder for parent task
+            self._item_finder[parent[self.item_idx]] = (
+                pos  # Update item finder for parent task
+            )
             pos = parentpos  # Move pos to parent position
         self._heap[pos] = newitem  # Place new item at its correct position in the heap
-        self._item_finder[newitem[1]] = pos  # Update item finder for new item task
+        self._item_finder[newitem[self.item_idx]] = (
+            pos  # Update item finder for new item task
+        )
 
     def _sift_down(self, pos):
         """
@@ -76,14 +85,14 @@ class ModifiablePriorityQueue:  # Min-Heap: Lower priority is better
 
             # Move the smaller child up.
             self._heap[pos] = self._heap[childpos]
-            self._item_finder[self._heap[childpos][1]] = pos
+            self._item_finder[self._heap[childpos][self.item_idx]] = pos
             pos = childpos
             childpos = _left_child_idx(pos)
 
         # The leaf at pos is empty now. Put newitem there and bubble it up
         # to its final resting place (by sifting its parents down).
         self._heap[pos] = newitem
-        self._item_finder[newitem[1]] = pos
+        self._item_finder[newitem[self.item_idx]] = pos
 
     def add_task(self, task, priority=0):
         """
@@ -120,16 +129,16 @@ class ModifiablePriorityQueue:  # Min-Heap: Lower priority is better
                 0
             ]  # Get the root of the heap (item with lowest priority)
             self._heap[0] = lastelt  # Move last element to the root
-            self._item_finder[lastelt[1]] = (
+            self._item_finder[lastelt[self.item_idx]] = (
                 0  # Update item finder for last element task
             )
             self._sift_down(0)  # Sift the root down to its correct position
         else:
             returnitem = lastelt  # If heap becomes empty, return the last element
-        del self._item_finder[returnitem[1]]  # Delete task from item finder
-        return (returnitem[0], returnitem[1])  # Return the task
+        del self._item_finder[returnitem[self.item_idx]]  # Delete task from item finder
+        return returnitem  # Return the task
 
-    def change_priority(self, task, new_priority: int):
+    def change_priority(self, task, new_priority: Tuple):
         """
         Change the priority of an existing task in the priority queue.
 
@@ -137,8 +146,9 @@ class ModifiablePriorityQueue:  # Min-Heap: Lower priority is better
         - task: The task whose priority needs to be changed.
         - new_priority: The new priority for the task.
         """
+        assert self.item_idx == len(new_priority)
         pos = self._item_finder[task]  # Get the position of the task in the heap
-        self._heap[pos] = (new_priority, task)  # Update the priority of the task
+        self._heap[pos] = new_priority + (task,)  # Update the priority of the task
         self._sift_up(pos)  # Sift the task down to maintain heap order
         self._sift_down(pos)  # Sift the task up to maintain heap order
 
@@ -150,7 +160,9 @@ class ModifiablePriorityQueue:  # Min-Heap: Lower priority is better
         """
         Build a heap from a list of items using Floyd's algorithm.
         """
-        heap = cls()
+        assert len(items) > 0, "Cannot heapify with empty list of items"
+        tuple_size = len(items[0])
+        heap = cls(tuple_size)
         heap._heap = items
         heap._item_finder = {
             prioritized_task_tuple[1]: idx
@@ -169,7 +181,7 @@ class ModifiablePriorityQueue:  # Min-Heap: Lower priority is better
 class TestModifiablePriorityQueue(unittest.TestCase):
     # Each test method must start with test_
     def test_add_task(self):
-        pq = ModifiablePriorityQueue()
+        pq = ModifiablePriorityQueue(2)
         pq.add_task("task1", 5)
         self.assertEqual(len(pq), 1)
         self.assertEqual(pq._heap[0], (5, "task1"))
@@ -187,7 +199,7 @@ class TestModifiablePriorityQueue(unittest.TestCase):
     def test_priority_modification(self):
         items = [(3, "task3"), (1, "task1"), (4, "task4"), (2, "task2"), (5, "task5")]
         pq = ModifiablePriorityQueue.heapify(items)
-        pq.change_priority("task5", -1)
+        pq.change_priority("task5", (-1))
         self.assertEqual(len(pq), 5)
         self.assertEqual(pq.pop_task(), (4, "task4"))
         self.assertEqual(pq.pop_task(), (3, "task3"))
