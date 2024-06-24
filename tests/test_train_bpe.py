@@ -38,7 +38,7 @@ def test_train_bpe_speed():
     profiler.disable()
     # Print the profiling results
     stats = pstats.Stats(profiler)
-    stats.sort_stats('time').print_stats(10)
+    print(stats.sort_stats('time').print_stats(10))
 
 
 def test_train_bpe():
@@ -64,7 +64,6 @@ def test_train_bpe():
             )
             for merge_token_1, merge_token_2 in gpt2_reference_merges
         ]
-    # breakpoint()
     assert merges == reference_merges
 
     # Compare the vocab to the expected output vocab
