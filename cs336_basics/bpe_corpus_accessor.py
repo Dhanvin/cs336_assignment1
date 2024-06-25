@@ -1,0 +1,314 @@
+
+import regex as re
+from typing import Dict, Tuple, List, Pattern, IO, Set
+from collections import defaultdict
+import pathlib
+
+from dataclasses import dataclass
+import os
+
+# Option 1: Very similar to current bce_tokenizer, with the exception that we store pre-tokens as keys directly
+# Key difference: Do NOT store actual integers. Stick to byte-strings.
+#
+# Each pre-token is a tuple of byte-strings
+# Pre-tokenization outputs a Dict {Tuple(bstring1, bstring2, ..): count}. This is "shelvable"
+#       --> De-risk: Store all pre-tokens and check file-size
+# For each Token-Pair in the Priority Queue, list the pre-tokens and Dict{Tuple(bstring1, bstring2, ..): index} where it is present. This is "shelvable"
+
+# Option 2: Most data-access / searching directly on the file.
+# > Pre-tokenize
+# > Store pretoken-offsets {idx: file-offset} --> In RAM
+# > For each token in vocab, store list of pretoken-idx, which will point to file-offset via  pretoken-offsets
+# > Given any byte-string (token-pair or otherwise), we can extract each pretoken where it is present, and perform a search to find location, and find surrounding vocab tokens within the offsets of that token
+#       -- O(n*m). Assuming that vocab bytestring is small, and pretokens aren't very large, this should be fine, esp. in comparison with finding the max element from priority queue.
+#       -- Merge involves
+# > At initialization, you can populate both vocab --> pretoken_idx store as well as pretoken_idx --> offset
+# > At every merge, 
+
+@dataclass
+class FileOffset:
+    start: int
+    end: int
+
+def _find_bytestring(fp: IO, search_b: bytes, offset_span :FileOffset) -> List[int]:
+    """
+    Finds occurrances of |search_b| in |fp| within |offset_span|
+    Return:
+        A list of byte-offsets into fp
+    """
+    def find_all_indices(source: bytes, search: bytes):
+        indices = []
+        index = source.find(search)
+
+        while index != -1:
+            indices.append(index)
+            index = source.find(search, index + 1)
+
+        return indices
+    # Save to revert
+    original_offset = fp.tell()
+    
+    # Find occurrances
+    fp.seek(offset_span.start)
+    source_string = fp.read(offset_span.end - offset_span.start)
+    found_indices = find_all_indices(source_string, search_b)
+    
+    # Revert file-pointer
+    fp.seek(original_offset)
+    
+    # Correct for start of offset_span
+    return map(lambda i: i + offset_span.start, found_indices)
+
+class PretokenizedCorpusAccessor:
+    def __init__(self, corpus_filepath, pattern: Pattern[str], chunk_size=1024*1024):
+        """
+        Parse and split a large text file into chunks based on a regex pattern.
+        
+        Args:
+            corpus_path (str): Path to the large text file.
+            pattern (str): Regex pattern to split the file.
+            chunk_size (int): Size of chunks to read from the file in bytes.
+        
+        Returns:
+            A mapping from pretoken-idx -> File offset
+        """
+        self.corpus_filepath = corpus_filepath
+        self.pretoken_offsets: Dict[int, FileOffset] = {}
+
+        # Foe each pretoke, maintain all the file-offsets in between a 
+        # previously merged token pair.
+        # When finding token-pairs in the corpus, if any end of the token-pair
+        # lies within this set, it is an invalid count
+        self.pretoken_merged_offsets = Dict[int, Set[int]]
+
+        # For each byte-token-pair in vocabulary, a list of pretokens where the bytestring is present
+        # Will be used to initialize heap and keep count
+        self.token_pair_pretoken_map: Dict[bytes, Set[int]] = {}
+
+        self.vocab_set = set([bytes([i]) for i in range(256)])
+
+        # Intitialize
+        compiled_pattern = re.compile(pattern)
+        try:
+            # Open the corpus in text-mode assuming 
+            with open(self.corpus_filepath, 'rb') as file:
+                print(f"Reading {self.corpus_filepath}")
+                buffer = ''
+                buffer_start_offset = 0
+                chunk_count = 0
+                pretoken_count = 0
+                eof_offset = os.path.getsize(self.corpus_filepath)
+
+                while file.tell() < eof_offset:
+                    # Read a chunk from the file
+                    chunk = file.read(chunk_size)
+                    chunk_count += 1
+                    
+                    # Full chunk is past EOF resulting in empty string
+                    if not chunk:
+                        # Process any remaining buffer
+                        chunk_count += 1
+
+                        # Move the file pointer to the start of buffer and read until end of file
+                        file.seek(buffer_start_offset)
+                        chunk = file.read(eof_offset - buffer_start_offset)
+                        assert chunk, "Failed to consume last part of file"
+                    
+                    # Add the new chunk to the buffer
+                    print(f"Processed {chunk_count} chunks")
+                    buffer += chunk
+
+                    # Split buffer into matches
+                    matches = list(compiled_pattern.finditer(buffer))
+                    if matches:
+                        # If there are matches, process them
+                        last_match_end = 0
+                        for match in matches:
+                            last_match_end = match.end()
+                            pretoken_count += 1
+                            # Add |buffer_start_offset| to get file-offset
+                            self.pretoken_offsets[pretoken_count] = FileOffset(start=match.start()+buffer_start_offset,
+                                                                        end=match.end()+buffer_start_offset)      
+                            self.pretoken_merged_offsets[pretoken_count] = set() # Initially no offset is within a merge                  
+                            # Iterate through each byte in match.group()
+                            pretoken_utf8_seq = match.group().encode('utf-8')
+                            for idx in range(len(pretoken_utf8_seq) - 1):
+                                token_byte_pair = bytes([pretoken_utf8_seq[idx], pretoken_utf8_seq[idx + 1]])
+                                if token_byte_pair not in self.token_pair_pretoken_map:
+                                    self.token_pair_pretoken_map[token_byte_pair] = set()
+                                self.token_pair_pretoken_map[token_byte_pair].add(pretoken_count)
+
+                        # Keep the part of the buffer after the last match
+                        buffer = buffer[last_match_end:]
+                        buffer_start_offset = match.end()
+        
+        except FileNotFoundError:
+            print(f"The file {self.corpus_filepath} does not exist.")
+
+    def _find_token_pair(self, token_pair_b: bytes) -> Dict[int, List[int]]:
+        """
+        For each pre-token, find all file offsets. Importantly, exclude any location where any 
+        end-point of the token-pair at the found location belongs to a previously merged token-pair.
+        """
+        out = {}
+        with open(self.corpus_filepath, 'rb') as file:
+            pretoken_ids = list(self.token_pair_pretoken_map[token_pair_b])
+            file_offsets = set(map(self.pretoken_offsets.get, pretoken_ids))
+            for pretoken_id, file_offset in zip(pretoken_ids, file_offsets):
+                invalid_locs = self.pretoken_merged_offsets[pretoken_id]
+                locations = _find_bytestring(file, token_pair_b, file_offset)
+                # NOTE: Check if any end-point of the found location belongs to a previously merged
+                filtered_locations = [l for l in locations if l not in invalid_locs and l + len(token_pair_b) not in invalid_locs]
+                out[pretoken_id] = filtered_locations
+        return out
+
+    
+    def merge(self, merge_pair: Tuple[bytes, bytes]) -> Dict[Tuple[bytes, bytes], int]:
+        """
+        Updates self.vocab, self.pretoken_merged_offsets and self.token_pair_pretoken_map
+        Returns:
+            Changed counts for each token-pair
+        """
+        def introduce_token_pair(new_tp: bytes, pretoken_idx: int):
+            if new_tp not in self.token_pair_pretoken_map:
+                self.token_pair_pretoken_map[new_tp] = set()            
+            self.token_pair_pretoken_map[new_tp].add(pretoken_idx)
+
+        old_token_pairs_changed = set()
+        changed_counts = {}
+
+        token_pair_b = merge_pair[0] + merge_pair[1]
+        # Add to vocab *before* merging: In case there are duplicates of token_pair_b, they will now form token_pairs
+        self.vocab_set.add(token_pair_b)
+        token_pair_len = len(token_pair_b)        
+        token_pair_file_offsets = self._find_token_pair(token_pair_b)
+        with open(self.corpus_filepath, 'rb') as file:
+            for pretoken_idx, offset in token_pair_file_offsets.items():
+                # NOTE: Mark offsets as merged
+                self.pretoken_merged_offsets[pretoken_idx].update(list(range(offset, offset + token_pair_len + 1)))
+                
+                # Look behind from beginning for pretoken
+                file.seek(offset)
+                token_before = self._find_maximal_token_before(file, token_pair_file_offsets, self.pretoken_offsets[pretoken_idx])
+                if token_before:
+                    old_token_pair_before = (token_before, merge_pair[0])
+                    merged_token_pair_before = (token_before, token_pair_b)
+                    
+                    # We will re-count older changed token-pairs later
+                    old_token_pairs_changed.add(old_token_pair_before)
+                    
+                    # Account for new entries and maintain a fresh running count
+                    introduce_token_pair(b''.join(merged_token_pair_before), pretoken_idx)
+                    if merged_token_pair_before not in changed_counts:
+                        changed_counts[merged_token_pair_before] = 1
+                    else:
+                        changed_counts[merged_token_pair_before] += 1
+
+                # Look ahead until end of pre-token
+                file.seek(offset + token_pair_len)
+                token_after = self._find_maximal_token_before(file, token_pair_file_offsets, self.pretoken_offsets[pretoken_idx])
+                if token_after:
+                    old_token_pair_after = (merge_pair[1], token_after)
+                    merged_token_pair_after = (token_pair_b, token_after)
+                    
+                    # We will re-count older changed token-pairs later
+                    old_token_pairs_changed.add(old_token_pair_after)
+
+                    # Account for new entries and maintain a fresh running count
+                    introduce_token_pair(merged_token_pair_after, pretoken_idx)
+                    if merged_token_pair_after not in changed_counts:
+                        changed_counts[merged_token_pair_after] = 1
+                    else:
+                        changed_counts[merged_token_pair_after] += 1
+        
+        # Update counts
+        for token_pair_b in old_token_pairs_changed:
+            changed_counts[token_pair_b] = self._revise_counts_for_old_token_pair(b''.join(token_pair_b))
+
+        return changed_counts
+
+    def _revise_counts_for_old_token_pair(self, token_pair_b: bytes) -> int:
+        count = 0
+        for pretoken_idx, locs in self._find_token_pair(token_pair_b).items():
+            if locs:
+                count += len(locs)
+            else:
+                # If no locs, it means that all occurrances in this pretoken have been previously merged merges so we will never find this token pair here anymore.
+                self.token_pair_pretoken_map[token_pair_b].remove(pretoken_idx)
+        return count
+
+    
+    def _find_maximal_token_before(self, fp: IO, offset_span: FileOffset) -> bytes:
+        """
+        Return:
+            The largest continuous byte-string from file |fp| in |self.vocab| before |fp.tell()| within |offset_span|
+            Returns an empty string if not found
+        """
+        
+        out = b''
+        this_offset = fp.tell()
+        assert this_offset >= offset_span.start and this_offset <= offset_span.end
+        
+        # Number of bytes to look behind
+        lookbehind = 1
+        while True:
+            if this_offset - lookbehind < offset_span.start:
+                break
+            # Reset and byte-string
+            fp.seek(this_offset - lookbehind)
+            prev_bytes = fp.read(lookbehind)
+            if prev_bytes in self.vocab_set:
+                out = prev_bytes
+                lookbehind -= 1
+            else:
+                break # We are done looking
+
+        fp.seek(this_offset)
+        return out
+
+    def _find_maximal_token_after(self, fp: IO, offset_span: FileOffset) -> bytes:
+        """
+        Return:
+            The largest continuous byte-string from file |fp| in |self.vocab| after |fp.tell()| within |offset_span|
+            Returns an empty string if not found
+        """
+        
+        out = b''
+        this_offset = fp.tell()
+        assert this_offset >= offset_span.start and this_offset <= offset_span.end
+        
+        # Number of bytes to look ahead
+        lookahead = 1
+        while True:
+            if this_offset + lookahead > offset_span.end:
+                break
+            # Get byte-string
+            fp.seek(this_offset)
+            next_bytes = fp.read(lookahead)
+            if next_bytes in self.vocab_set:
+                out = next_bytes
+                lookahead += 1
+            else:
+                break # We are done looking
+
+        fp.seek(this_offset)
+        return out
+
+            
+# Example usage
+
+# Matches the following patterns:
+# Contractions ('s, 'd, 'm, 't, ll, ve, re).
+# Words composed entirely of letters (\p{L}).
+# Words composed entirely of digits (\p{N}).
+# Words composed of characters that are not whitespace, letters, or digits.
+# Sequences of whitespace characters.
+PRETOKEN_PATTERN = (
+    r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+)
+
+DATASET_PATH = (pathlib.Path(__file__).resolve()).parent.parent
+PretokenizedCorpusAccessor(DATASET_PATH / 'tokenizer_mini_test.txt', PRETOKEN_PATTERN)
+
+# DATASET_PATH = (pathlib.Path(__file__).resolve()).parent.parent / 'data'
+# PretokenizedCorpusAccessor(DATASET_PATH / 'TinyStoriesV2-GPT4-valid.txt', PRETOKEN_PATTERN)
