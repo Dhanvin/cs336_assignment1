@@ -113,7 +113,10 @@ class TokenPairCorpusMap:
     ):
         if token_pair in self.token_pair_corpus_info:
             if pretoken_idx in self.token_pair_corpus_info[token_pair]:
-                if location_idx in self.token_pair_corpus_info[token_pair][pretoken_idx]:
+                if (
+                    location_idx
+                    in self.token_pair_corpus_info[token_pair][pretoken_idx]
+                ):
                     self.token_pair_corpus_info[token_pair][pretoken_idx].remove(
                         location_idx
                     )
@@ -223,8 +226,13 @@ class MyBPETokenizer:
         self.token_pair_corpus_map.process_corpus(self.training_corpus)
         self.token_pair_priority_queue = ModifiablePriorityQueue.heapify(
             [
-                HeapItem(token_pair, (self.token_pair_corpus_map.get_token_pair_count(token_pair), 
-                                      tuple(map(self.token_vocab.get, token_pair))))
+                HeapItem(
+                    token_pair,
+                    (
+                        self.token_pair_corpus_map.get_token_pair_count(token_pair),
+                        tuple(map(self.token_vocab.get, token_pair)),
+                    ),
+                )
                 for token_pair in self.token_pair_corpus_map.get_all_token_pairs()
             ]
         )
@@ -245,7 +253,9 @@ class MyBPETokenizer:
         # Add special tokens
         len_vocab_no_special = len(self.token_vocab)
         for idx, sp_token in enumerate(self.special_tokens):
-            self.token_vocab[len_vocab_no_special + idx] = sp_token.encode('utf-8')  # No need to encode
+            self.token_vocab[len_vocab_no_special + idx] = sp_token.encode(
+                "utf-8"
+            )  # No need to encode
 
     def get_vocab(self) -> Dict[int, bytes]:
         # vocab: dict[int, bytes]
@@ -265,7 +275,9 @@ class MyBPETokenizer:
                     (count, utf8_byte_str_pair),
                 )
             else:
-                self.token_pair_priority_queue.add_task(token_pair, (count, utf8_byte_str_pair))
+                self.token_pair_priority_queue.add_task(
+                    token_pair, (count, utf8_byte_str_pair)
+                )
 
     def train(self, num_merges: int):
         for i in range(num_merges):
@@ -282,12 +294,10 @@ class MyBPETokenizer:
                 self.token_pair_corpus_map.token_pair_corpus_info,
                 key=lambda k: (
                     self.token_pair_corpus_map.get_token_pair_count(k),
-                    tuple(map(self.token_vocab.get, k))
+                    tuple(map(self.token_vocab.get, k)),
                 ),
             )
-            freq = self.token_pair_corpus_map.get_token_pair_count(
-                chosen_token_pair
-            )
+            freq = self.token_pair_corpus_map.get_token_pair_count(chosen_token_pair)
 
         # print(f"Merge #{len(self.merges) + 1} {token_seq_to_bytes(chosen_token_pair, self.token_vocab)} with freq: {freq}")
 
@@ -327,7 +337,9 @@ class MyBPETokenizer:
                     )
 
                     # Update corpus
-                    self.training_corpus[pretoken_idx].token_pairs[next_loc] = new_token_pair_next
+                    self.training_corpus[pretoken_idx].token_pairs[
+                        next_loc
+                    ] = new_token_pair_next
 
                     # Add changed token-pairs to change-list
                     changed_token_pairs.add(next_token_pair)
@@ -347,7 +359,9 @@ class MyBPETokenizer:
                         new_token_pair_prev, pretoken_idx, prev_loc
                     )
                     # Update corpus
-                    self.training_corpus[pretoken_idx].token_pairs[prev_loc] = new_token_pair_prev
+                    self.training_corpus[pretoken_idx].token_pairs[
+                        prev_loc
+                    ] = new_token_pair_prev
 
                     # Add changed token-pairs to change-list
                     changed_token_pairs.add(prev_token_pair)
@@ -361,7 +375,7 @@ class MyBPETokenizer:
         #     if bytes_changed in debug_list:
         #         print(
         #             f"Change --> {bytes_changed}: {self.token_pair_corpus_map.get_token_pair_count(changed_tk)} occurrances"
-        #         ) 
+        #         )
 
         # Update priority queue
         if self.USE_HEAP:
