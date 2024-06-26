@@ -113,8 +113,8 @@ class PretokenizedCorpusAccessor:
                     chunk_count += 1
 
                     # DEBUG:
-                    if chunk_count > 5000:
-                        break
+                    # if chunk_count > 5000:
+                    #     break
 
                     # Full chunk is past EOF resulting in empty string
                     if not chunk:
@@ -127,7 +127,9 @@ class PretokenizedCorpusAccessor:
                         assert chunk, "Failed to consume last part of file"
                     
                     # Add the new chunk to the buffer
-                    print(f"Processed {chunk_count} chunks")
+                    # if chunk_count % 1024 == 0:
+                        # print(f"Processed {chunk_count} chunks")
+
                     buffer += chunk
 
                     # Split buffer into matches after decoding to unicode characters
@@ -135,7 +137,6 @@ class PretokenizedCorpusAccessor:
                     matches = list(compiled_pattern.finditer(unicode_buffer))
                     # breakpoint()
                     if matches:
-                        print(f"Found {len(matches)} pretokens for chunk {chunk_count}. Buffer_start: {buffer_start_offset}")
                         # If there are matches, process them
                         last_match_end_byte_offset = 0
                         for match in matches:
@@ -217,19 +218,17 @@ class PretokenizedCorpusAccessor:
         # Add to vocab *before* merging: In case there are duplicates of token_pair_b, they will now form token_pairs
         self.vocab_set.add(token_pair_b)
         token_pair_len = len(token_pair_b)        
-        with open(self.corpus_filepath, 'r') as file:
+        with open(self.corpus_filepath, 'rb') as file:
             token_pair_file_offsets = self._find_token_pair(file, token_pair_b)
             for pretoken_idx, offsets in token_pair_file_offsets.items():
                 pretoken_offset_span = self.pretoken_offsets[pretoken_idx]
 
-                #DEBUG:
                 file.seek(pretoken_offset_span.start-1)
                 pretoken = file.read(pretoken_offset_span.end - pretoken_offset_span.start)
-                # #DEBUG: ?? I'm seeing too many pretokens with empty offsets even in first iteration... Why?
-                #print(f"Processing {token_pair_b} for {pretoken} at {offsets}")
+
                 # NOTE: Mark offsets as merged
                 for offset in offsets:
-                    print(f"Processing {token_pair_b} for {pretoken} at {offset}")
+                    # print(f"Processing {token_pair_b} for {pretoken} at {offset}")
                     self.pretoken_merged_offsets[pretoken_idx].update(list(range(offset, offset + token_pair_len + 1))) 
                     # Look behind from beginning for pretoken
                     file.seek(offset)
@@ -336,7 +335,7 @@ class PretokenizedCorpusAccessor:
         """
         out = b''
         this_offset = fp.tell()
-        print(f'Find maximal token from {this_offset} in span {offset_span.start} to {offset_span.end}')
+        # print(f'Find maximal token from {this_offset} in span {offset_span.start} to {offset_span.end}')
         assert this_offset >= offset_span.start and this_offset <= offset_span.end
         
         # Number of bytes to look ahead
@@ -350,7 +349,7 @@ class PretokenizedCorpusAccessor:
             if next_bytes in self.vocab_set:
                 out = next_bytes
                 lookahead += 1
-                print(f'Found {next_bytes} in vocab set')
+                # print(f'Found {next_bytes} in vocab set')
             else:
                 break # We are done looking
 
@@ -391,14 +390,16 @@ if __name__ == "__main__":
     corpus_accessor = PretokenizedCorpusAccessor(DATASET_PATH / 'TinyStoriesV2-GPT4-valid.txt', PRETOKEN_PATTERN)
     end_time = timeit.default_timer()
     print(f"Initialization time: {end_time - start_time} seconds")
-    with open(corpus_accessor.corpus_filepath, 'rb') as file:
-        corpus_accessor.print_pretoken_at(file, range(len(corpus_accessor.pretoken_offsets.keys())))
+    
+    # DEBUG: Print pretokens
+    # with open(corpus_accessor.corpus_filepath, 'rb') as file:
+    #     corpus_accessor.print_pretoken_at(file, range(len(corpus_accessor.pretoken_offsets.keys())))
     # breakpoint()
 
-    # start_time = timeit.default_timer()
-    # corpus_accessor.train_one_step()
-    # end_time = timeit.default_timer()
-    # print(f"Train-one-step time: {end_time - start_time} seconds")
+    start_time = timeit.default_timer()
+    corpus_accessor.train_one_step()
+    end_time = timeit.default_timer()
+    print(f"Train-one-step time: {end_time - start_time} seconds")
 
 
 
