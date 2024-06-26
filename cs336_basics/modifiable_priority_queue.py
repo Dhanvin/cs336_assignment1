@@ -156,6 +156,7 @@ class ModifiablePriorityQueue:
         """
         pos = self._item_finder[task] 
         self._heap[pos].priority = new_priority
+        
         # Sift the task up and down to maintain heap order
         self._sift_up(pos)  
         self._sift_down(pos)  
