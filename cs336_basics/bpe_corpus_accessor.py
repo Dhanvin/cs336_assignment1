@@ -415,19 +415,25 @@ if __name__ == "__main__":
     args = parser.parse_args()
     configure_logging(args.debug)
 
-    start_time = timeit.default_timer()
     DATASET_PATH = (pathlib.Path(__file__).resolve()).parent.parent / 'data'
-    DATASET_FILE = 'TinyStoriesV2-GPT4-valid.txt'
-    corpus_accessor = PretokenizedCorpusAccessor(DATASET_PATH / DATASET_FILE, PRETOKEN_PATTERN)
+    DATASET_FILE = 'TinyStoriesV2-GPT4-train.txt'
+    corpus_path = DATASET_PATH / DATASET_FILE
+    # Get stored initialization locaiton
+    stem = corpus_path.stem
+    pickle_file_path = corpus_path.with_name(f"{stem}_init.pkl")
+    
+    start_time = timeit.default_timer()
+    if pickle_file_path.exists():
+        logger.info(f"Loading from stored state at {pickle_file_path}")
+        with open(pickle_file_path, 'rb') as file:
+            corpus_accessor = pickle.load(file)
+    else:
+        corpus_accessor = PretokenizedCorpusAccessor(DATASET_PATH / DATASET_FILE, PRETOKEN_PATTERN)
+        with open(pickle_file_path, 'wb') as file:
+            pickle.dump(corpus_accessor, file)
     end_time = timeit.default_timer()
     print(f"Initialization time: {end_time - start_time: .2f} seconds")
     
-    # Store initialized file.
-    stem = corpus_accessor.corpus_filepath.stem
-    pickle_file_path = corpus_accessor.corpus_filepath.with_name(f"{stem}_init.pkl")
-    with open(pickle_file_path, 'wb') as file:
-        pickle.dump(corpus_accessor, file)
-
     # DEBUG: Print pretokens
     # with open(corpus_accessor.corpus_filepath, 'rb') as file:
     #     corpus_accessor.print_pretoken_at(file, range(len(corpus_accessor.pretoken_offsets.keys())))
