@@ -48,6 +48,9 @@ class ModifiablePriorityQueue:
 
     def contains(self, item):
         return item in self._item_finder
+    
+    def get_priority(self, item):
+        return self._heap[self._item_finder[item]].priority
 
     def _sift_up(self, pos):
         """

@@ -7,6 +7,9 @@ from .modifiable_priority_queue import ModifiablePriorityQueue, HeapItem
 
 import cProfile
 import pstats
+import multiprocessing
+from functools import partial
+import logging
 
 from dataclasses import dataclass
 import os
@@ -28,6 +31,11 @@ import os
 #       -- Merge involves
 # > At initialization, you can populate both vocab --> pretoken_idx store as well as pretoken_idx --> offset
 # > At every merge, 
+
+logger = logging.getLogger(__name__)
+def configure_logging(debug=False):
+    level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(level=level, format='%(levelname)s - %(message)s')
 
 def _char_to_byte_offset(unicode_string, char_pos):
     return len(unicode_string[:char_pos].encode('utf-8'))
@@ -64,7 +72,15 @@ def _find_bytestring(fp: IO, search_b: bytes, offset_span :FileOffset) -> List[i
     fp.seek(original_offset)
     
     # Correct for start of offset_span
-    return map(lambda i: i + offset_span.start, found_indices)
+    return list(map(lambda i: i + offset_span.start, found_indices))
+
+# Used to parallelize the time-consuming operation of finding a bytestring in a file
+def _find_token_pair_worker(file_path: str, token_pair_b: bytes, pretoken_id: int, 
+                            file_offset_span: Tuple[int, int], invalid_locs: set) -> Tuple[int, List[int]]:
+    with open(file_path, 'rb') as file:
+        locations = _find_bytestring(file, token_pair_b, file_offset_span)
+        filtered_locations = [l for l in locations if l not in invalid_locs and l + len(token_pair_b) not in invalid_locs]
+    return pretoken_id, filtered_locations
 
 class PretokenizedCorpusAccessor:
     def __init__(self, corpus_filepath, pattern: Pattern[str], chunk_size=1024):
@@ -113,8 +129,13 @@ class PretokenizedCorpusAccessor:
                     chunk_count += 1
 
                     # DEBUG:
-                    # if chunk_count > 5000:
-                    #     break
+                    if chunk_count > 5000:
+                        break
+
+                    # Track % of file read
+                    percent_file_read = float(buffer_start_offset) / float(eof_offset)
+                    if chunk_count % (1024 * 5) == 0:    
+                        logger.debug(f'% file read: {percent_file_read: .1f}')
 
                     # Full chunk is past EOF resulting in empty string
                     if not chunk:
@@ -128,7 +149,7 @@ class PretokenizedCorpusAccessor:
                     
                     # Add the new chunk to the buffer
                     # if chunk_count % 1024 == 0:
-                        # print(f"Processed {chunk_count} chunks")
+                        # logger.debug(f"Processed {chunk_count} chunks")
 
                     buffer += chunk
 
@@ -179,7 +200,32 @@ class PretokenizedCorpusAccessor:
         except FileNotFoundError:
             print(f"The file {self.corpus_filepath} does not exist.")
 
-    def _find_token_pair(self, file: IO, token_pair_b: bytes) -> Dict[int, List[int]]:
+
+    
+    def _find_token_pair_parallel(self, token_pair_b: bytes) -> Dict[int, List[int]]:
+
+        pretoken_ids = list(self.token_pair_pretoken_map[token_pair_b])
+        file_offsets = list(map(self.pretoken_offsets.get, pretoken_ids))
+        
+        logger.debug(f"> Searching in {len(file_offsets)} locations")
+        
+        # Prepare arguments for multiprocessing, parallelizing based on pre-token and corresponding offsets
+        worker_args = [(self.corpus_filepath, token_pair_b, pretoken_id, file_offset_span, self.pretoken_merged_offsets[pretoken_id])
+                    for pretoken_id, file_offset_span in zip(pretoken_ids, file_offsets)]
+        
+        # Use multiprocessing to parallelize the search
+        with multiprocessing.Pool(processes=os.cpu_count()) as pool:
+            # Apply worker function to all the prepared arguments in parallel.
+            results = pool.starmap(_find_token_pair_worker, worker_args)
+        
+        # Combine results
+        out = {pretoken_id: locations for pretoken_id, locations in results}
+        total_cnt = sum(len(locations) for locations in out.values())
+        
+        logger.debug(f"> Found in {total_cnt} locations")
+        return out
+    # NOTE for efficiency Consider parallelizing this operation since it is time con
+    def _find_token_pair(self, file: IO, token_pair_b: bytes, expected_cnt: int= None) -> Dict[int, List[int]]:
         """
         For each pre-token, find all file offsets. Importantly, exclude any location where any 
         end-point of the token-pair at the found location belongs to a previously merged token-pair.
@@ -188,21 +234,24 @@ class PretokenizedCorpusAccessor:
         file.seek(0)
         pretoken_ids = list(self.token_pair_pretoken_map[token_pair_b])
         file_offsets = list(map(self.pretoken_offsets.get, pretoken_ids))
-        for pretoken_id, file_offset in zip(pretoken_ids, file_offsets):
+        total_cnt = 0
+        logger.debug(f"> Searching in {len(file_offsets)} locations")
+        for pretoken_id, file_offset_span in zip(pretoken_ids, file_offsets):
             invalid_locs = self.pretoken_merged_offsets[pretoken_id]
-            locations = _find_bytestring(file, token_pair_b, file_offset)
+            locations = _find_bytestring(file, token_pair_b, file_offset_span)
             # NOTE: Check if any end-point of the found location belongs to a previously merged
-            filtered_locations = [l for l in locations if l not in invalid_locs and l + len(token_pair_b) not in invalid_locs]
+            filtered_locations = [l for l in locations if l not in invalid_locs and l + len(token_pair_b)  not in invalid_locs]
             out[pretoken_id] = filtered_locations
+            total_cnt += len(filtered_locations)
+        # if expected_cnt is not None and expected_cnt != total_cnt:
+        #     breakpoint()
+        logger.debug(f"> Found in {total_cnt} locations")
         return out
 
-    
-    def get_token_pair_count(self, file: IO, token_pair_b: bytes) -> int:
-        return sum([len(locations) for locations in self._find_token_pair(file, token_pair_b).values()])
-
-    def merge(self, merge_pair: Tuple[bytes, bytes]) -> Dict[Tuple[bytes, bytes], int]:
+    def merge(self, merge_pair: Tuple[bytes, bytes], expected_freq: int=None) -> Dict[Tuple[bytes, bytes], int]:
         """
-        Updates self.vocab, self.pretoken_merged_offsets and self.token_pair_pretoken_map
+        Updates self.vocab and self.pretoken_merged_offsets 
+        Only update self.token_pair_pretoken_map for new tokens, but not old ones
         Returns:
             Changed counts for each token-pair
         """
@@ -211,15 +260,13 @@ class PretokenizedCorpusAccessor:
                 self.token_pair_pretoken_map[new_tp] = set()            
             self.token_pair_pretoken_map[new_tp].add(pretoken_idx)
 
-        old_token_pairs_changed = set()
-        changed_counts = {}
-
+        changed_counts = defaultdict(int)
         token_pair_b = merge_pair[0] + merge_pair[1]
-        # Add to vocab *before* merging: In case there are duplicates of token_pair_b, they will now form token_pairs
-        self.vocab_set.add(token_pair_b)
         token_pair_len = len(token_pair_b)        
+
+        token_pair_file_offsets = self._find_token_pair_parallel(token_pair_b)
         with open(self.corpus_filepath, 'rb') as file:
-            token_pair_file_offsets = self._find_token_pair(file, token_pair_b)
+            # token_pair_file_offsets = self._find_token_pair(file, token_pair_b, expected_freq)
             for pretoken_idx, offsets in token_pair_file_offsets.items():
                 pretoken_offset_span = self.pretoken_offsets[pretoken_idx]
 
@@ -228,25 +275,19 @@ class PretokenizedCorpusAccessor:
 
                 # NOTE: Mark offsets as merged
                 for offset in offsets:
-                    # print(f"Processing {token_pair_b} for {pretoken} at {offset}")
-                    self.pretoken_merged_offsets[pretoken_idx].update(list(range(offset, offset + token_pair_len + 1))) 
+                    # logger.debug(f"Processing {token_pair_b} for {pretoken} at {offset}")
+                    # Mark all offsets that fall *within* |token_pair_b|.
+                    self.pretoken_merged_offsets[pretoken_idx].update(list(range(offset + 1, offset + token_pair_len))) 
                     # Look behind from beginning for pretoken
                     file.seek(offset)
                     token_before = self._find_maximal_token_before(file, pretoken_offset_span)
                     if token_before:
                         old_token_pair_before = (token_before, merge_pair[0])
-                        merged_token_pair_before = (token_before, token_pair_b)
-                        
-                        # We will re-count older changed token-pairs later
-                        old_token_pairs_changed.add(old_token_pair_before)
-                        
+                        merged_token_pair_before = (token_before, token_pair_b)                  
                         # Account for new entries and maintain a fresh running count
                         introduce_token_pair(b''.join(merged_token_pair_before), pretoken_idx)
-                        if merged_token_pair_before not in changed_counts:
-                            changed_counts[merged_token_pair_before] = 1
-                        else:
-                            changed_counts[merged_token_pair_before] += 1
-                        # breakpoint()
+                        changed_counts[merged_token_pair_before] += 1
+                        changed_counts[old_token_pair_before] -= 1
 
                     # Look ahead until end of pre-token
                     file.seek(offset + token_pair_len)
@@ -254,49 +295,40 @@ class PretokenizedCorpusAccessor:
                     if token_after:
                         old_token_pair_after = (merge_pair[1], token_after)
                         merged_token_pair_after = (token_pair_b, token_after)
-                        
-                        # We will re-count older changed token-pairs later
-                        old_token_pairs_changed.add(old_token_pair_after)
-
                         # Account for new entries and maintain a fresh running count
                         introduce_token_pair(b''.join(merged_token_pair_after), pretoken_idx)
-                        if merged_token_pair_after not in changed_counts:
-                            changed_counts[merged_token_pair_after] = 1
-                        else:
-                            changed_counts[merged_token_pair_after] += 1
+                        changed_counts[merged_token_pair_after] += 1
+                        changed_counts[old_token_pair_after] -= 1
             
-        
-            # Update counts
-            for token_pair_b in old_token_pairs_changed:
-                # breakpoint()
-                changed_counts[token_pair_b] = self._revise_counts_for_old_token_pair(file, b''.join(token_pair_b))
-
+        # Important: Add to vocab *after* merging since |_find_maximal_token_before| and |_find_maximal_token_after|
+        # reference vocab list. In case there are duplicates of token_pair_b, they will now form token_pairs *after* the merge
+        self.vocab_set.add(token_pair_b)
         return changed_counts
 
     def train_one_step(self):
-        max_freq_token_pair = self.priority_queue.pop_task().priority[1]
-        changed_counts = self.merge(max_freq_token_pair)
-        for token_pair, count in changed_counts.items():
+        freq, max_freq_token_pair = self.priority_queue.pop_task().priority
+        logger.debug(f"Merging {max_freq_token_pair} with freq: {freq}")
+        start_time = timeit.default_timer()
+        changed_counts = self.merge(max_freq_token_pair, freq)
+        merge_time = timeit.default_timer()
+        # logger.debug(f"Merge time: {merge_time - start_time} seconds")
+        
+        for token_pair, count_change in changed_counts.items():
             token_pair_b = b''.join(token_pair)
             if self.priority_queue.contains(token_pair_b):
+                count = self.priority_queue.get_priority(token_pair_b)[0]
+                logger.debug(f'>> Priority of {token_pair_b} changed from {count} to {count + count_change}')
+                count += count_change
                 self.priority_queue.change_priority(
                     token_pair_b,
                     (count, token_pair),
                 )
             else:
-                self.priority_queue.add_task(token_pair_b, (count, token_pair))
-
-    def _revise_counts_for_old_token_pair(self, file, token_pair_b: bytes) -> int:
-        count = 0
-        if token_pair_b not in self.token_pair_pretoken_map:
-            breakpoint()
-        for pretoken_idx, locs in self._find_token_pair(file, token_pair_b).items():
-            if locs:
-                count += len(locs)
-            else:
-                # If no locs, it means that all occurrances in this pretoken have been previously merged merges so we will never find this token pair here anymore.
-                self.token_pair_pretoken_map[token_pair_b].remove(pretoken_idx)
-        return count
+                logger.debug(f'>> Heap insertion: Adding {token_pair_b} with count {count_change}')
+                assert count_change > 0, f"Heap insertion error: Trying to add new token-pair {token_pair} with count {count_change}"
+                self.priority_queue.add_task(token_pair_b, (count_change, token_pair))
+        # priority_update_time = timeit.default_timer()
+        # logger.debug(f"PQ update time: {priority_update_time - merge_time} seconds")
 
     
     def _find_maximal_token_before(self, fp: IO, offset_span: FileOffset) -> bytes:
@@ -320,7 +352,7 @@ class PretokenizedCorpusAccessor:
             prev_bytes = fp.read(lookbehind)
             if prev_bytes in self.vocab_set:
                 out = prev_bytes
-                lookbehind -= 1
+                lookbehind += 1
             else:
                 break # We are done looking
 
@@ -335,7 +367,7 @@ class PretokenizedCorpusAccessor:
         """
         out = b''
         this_offset = fp.tell()
-        # print(f'Find maximal token from {this_offset} in span {offset_span.start} to {offset_span.end}')
+        # logger.debug(f'Find maximal token from {this_offset} in span {offset_span.start} to {offset_span.end}')
         assert this_offset >= offset_span.start and this_offset <= offset_span.end
         
         # Number of bytes to look ahead
@@ -349,7 +381,7 @@ class PretokenizedCorpusAccessor:
             if next_bytes in self.vocab_set:
                 out = next_bytes
                 lookahead += 1
-                # print(f'Found {next_bytes} in vocab set')
+                # logger.debug(f'Found {next_bytes} in vocab set')
             else:
                 break # We are done looking
 
@@ -362,9 +394,7 @@ class PretokenizedCorpusAccessor:
             offset_span = self.pretoken_offsets[idx]
             fp.seek(offset_span.start)
             pretoken = fp.read(offset_span.end - offset_span.start)
-            # if idx == 6372:
-            #     breakpoint()
-            print(f"{idx}/{len(pretoken_idx)}: {pretoken.decode('utf-8')}")
+            logger.debug(f"{idx}/{len(pretoken_idx)}: {pretoken.decode('utf-8')}")
             
         fp.seek(restore_to)
 # Example usage
@@ -379,15 +409,28 @@ PRETOKEN_PATTERN = (
     r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 )
 
-import timeit
 # python -m cs336_basics.bpe_corpus_accessor
 if __name__ == "__main__":
     # DATASET_PATH = (pathlib.Path(__file__).resolve()).parent.parent
     # corpus_accessor = PretokenizedCorpusAccessor(DATASET_PATH / 'tokenizer_mini_test.txt', PRETOKEN_PATTERN)
-    
+    import argparse
+    import timeit
+
+
+    parser = argparse.ArgumentParser(description="Example script with debug logging")
+    parser.add_argument('--debug', action='store_true', help="Enable debug messages")
+    args = parser.parse_args()
+    configure_logging(args.debug)
+
     start_time = timeit.default_timer()
+    
     DATASET_PATH = (pathlib.Path(__file__).resolve()).parent.parent / 'data'
     corpus_accessor = PretokenizedCorpusAccessor(DATASET_PATH / 'TinyStoriesV2-GPT4-valid.txt', PRETOKEN_PATTERN)
+
+    # DATASET_PATH = (pathlib.Path(__file__).resolve()).parent.parent / 'tests' / 'fixtures'
+    # corpus_accessor = PretokenizedCorpusAccessor(DATASET_PATH / 'corpus.en', PRETOKEN_PATTERN)
+
+
     end_time = timeit.default_timer()
     print(f"Initialization time: {end_time - start_time} seconds")
     
@@ -396,18 +439,23 @@ if __name__ == "__main__":
     #     corpus_accessor.print_pretoken_at(file, range(len(corpus_accessor.pretoken_offsets.keys())))
     # breakpoint()
 
-    start_time = timeit.default_timer()
-    corpus_accessor.train_one_step()
-    end_time = timeit.default_timer()
-    print(f"Train-one-step time: {end_time - start_time} seconds")
+    profiler = cProfile.Profile()
+    profiler.enable()
+    for i in range(100):
+        start_time = timeit.default_timer()
+        corpus_accessor.train_one_step()
+        end_time = timeit.default_timer()
+        print(f"Train step #{i} time: {end_time - start_time} seconds")
+    profiler.disable()
 
 
+    # Print profiling results
+    stats = pstats.Stats(profiler).strip_dirs().sort_stats('cumulative')
+    stats.print_stats()
 
     # Note: Saving the Heap and corpus_accessor after a few merges should retain full state
+    # TODO: paralelize finding of strings _
 
-    # By construction, token-bytestring-pair is the second element in the priority tuple
-
-    # breakpoint()
 
 
 
