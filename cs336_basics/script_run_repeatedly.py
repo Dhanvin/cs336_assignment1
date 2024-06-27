@@ -6,7 +6,7 @@ def main():
     while True:
         try:
             with open("/tmp/bpe_file_based_tokenizer.out", "w") as stdout_f, open(
-                "/tmp/bpe_file_based_tokenizer.out", "w"
+                "/tmp/bpe_file_based_tokenizer.err", "w"
             ) as stderr_f:
                 process = subprocess.Popen(
                     ["python", "-m", "cs336_basics.bpe_file_based_tokenizer"],

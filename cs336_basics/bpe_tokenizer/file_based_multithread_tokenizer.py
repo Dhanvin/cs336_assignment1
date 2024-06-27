@@ -11,16 +11,9 @@ import logging
 
 from dataclasses import dataclass
 import os
+import pickle
 
-# Option 1: Very similar to current bce_tokenizer, with the exception that we store pre-tokens as keys directly
-# Key difference: Do NOT store actual integers. Stick to byte-strings.
-#
-# Each pre-token is a tuple of byte-strings
-# Pre-tokenization outputs a Dict {Tuple(bstring1, bstring2, ..): count}. This is "shelvable"
-#       --> De-risk: Store all pre-tokens and check file-size
-# For each Token-Pair in the Priority Queue, list the pre-tokens and Dict{Tuple(bstring1, bstring2, ..): index} where it is present. This is "shelvable"
-
-# Option 2: Most data-access / searching directly on the file.
+# Approach 2: Most data-access / searching directly on the file.
 # > Pre-tokenize
 # > Store pretoken-offsets {idx: file-offset} --> In RAM
 # > For each token in vocab, store list of pretoken-idx, which will point to file-offset via  pretoken-offsets
@@ -99,7 +92,11 @@ def _find_token_pair_worker(
         ]
     return pretoken_id, filtered_locations
 
-
+# TODO: Since order of chunks doesn't matter as long as chunks are aligned with pre-token boundaries,
+#       split_corpus(): The file can be split into 100MB chunks, extending each chunk to cover a pre-token.
+#       Each corpus split can be independently processed and then the results can be aggregated.
+#
+# Bottleneck: We are processing single large files and keeping large data-structures in memory instead of focused filling.
 class CorpusPretokenizer:
     """
     Parse and split a large text file into chunks based on a regex pattern.
@@ -120,8 +117,8 @@ class CorpusPretokenizer:
 
         # File-paths
         instance.corpus_filepath = corpus_filepath
-        stem = corpus_path.stem
-        instance.pickle_file_path = corpus_path.with_name(f"{stem}_init.pkl")
+        stem = corpus_filepath.stem
+        instance.pickle_file_path = corpus_filepath.with_name(f"{stem}_init.pkl")
 
         # Parsing state; useful for files spanning several GBs that crash
         instance.pretoken_offsets: Dict[int, FileOffset] = {}
@@ -142,6 +139,7 @@ class CorpusPretokenizer:
             return pickle.load(f)
 
     def save(self):
+        return
         with open(self.pickle_file_path, "wb") as f:
             pickle.dump(self, f)
 
@@ -289,7 +287,7 @@ class BpeTokenizerFileBasedTrainer:
         # Use multiprocessing to parallelize the search
         with multiprocessing.Pool(processes=os.cpu_count()) as pool:
             # Apply worker function to all the prepared arguments in parallel.
-            results = pool.starmap(_find_token_pair_worker, worker_args)
+            results = pool.starmap(_find_token_pair_worker, worker_args, chunksize=10)
 
         # Combine results
         out = {pretoken_id: locations for pretoken_id, locations in results}
@@ -342,12 +340,6 @@ class BpeTokenizerFileBasedTrainer:
         with open(self.pretokenizer.corpus_filepath, "rb") as file:
             for pretoken_idx, offsets in token_pair_file_offsets.items():
                 pretoken_offset_span = self.pretokenizer.pretoken_offsets[pretoken_idx]
-
-                file.seek(pretoken_offset_span.start - 1)
-                pretoken = file.read(
-                    pretoken_offset_span.end - pretoken_offset_span.start
-                )
-
                 # NOTE: Mark offsets as merged
                 for offset in offsets:
                     # logger.debug(f"Processing {token_pair_b} for {pretoken} at {offset}")
@@ -493,6 +485,13 @@ class BpeTokenizerFileBasedTrainer:
 
         fp.seek(restore_to)
 
+    def add_special_tokens_to_vocab(self, special_tokens: List = []):
+        # Add special tokens
+        for sp_token in special_tokens:
+            self.vocab_set.add(sp_token.encode(
+                "utf-8"
+            ))
+
 
 # Example usage
 
@@ -517,17 +516,20 @@ if __name__ == "__main__":
     import timeit
     import pickle
 
-    parser = argparse.ArgumentParser(description="Example script with debug logging")
+    parser = argparse.ArgumentParser(description="File based tokenizer with checkpoint-loading")
     parser.add_argument("--debug", action="store_true", help="Enable debug messages")
     args = parser.parse_args()
     configure_logging(args.debug)
 
-    DATASET_PATH = (pathlib.Path(__file__).resolve()).parent.parent / "data"
-    DATASET_FILE = "TinyStoriesV2-GPT4-train.txt"
+    DATASET_PATH = (pathlib.Path(__file__).resolve()).parent.parent.parent / "data"
+    DATASET_FILE = "TinyStoriesV2-GPT4-valid.txt"
     corpus_path = DATASET_PATH / DATASET_FILE
     # Get stored initialization locaiton
     stem = corpus_path.stem
     pickle_file_path = corpus_path.with_name(f"{stem}_init.pkl")
+
+    profiler_init = cProfile.Profile()
+    profiler_init.enable()
 
     start_time = timeit.default_timer()
     if pickle_file_path.exists():
@@ -543,23 +545,28 @@ if __name__ == "__main__":
         corpus_accessor = BpeTokenizerFileBasedTrainer(corpus_pretokenizer)
     end_time = timeit.default_timer()
     print(f"Initialization time: {end_time - start_time: .2f} seconds")
+    profiler_init.disable()
+
+    # Print profiling results
+    stats = pstats.Stats(profiler_init).strip_dirs().sort_stats("cumulative")
+    stats.print_stats()
 
     # DEBUG: Print pretokens
     # with open(corpus_accessor.corpus_filepath, 'rb') as file:
     #     corpus_accessor.print_pretoken_at(file, range(len(corpus_accessor.pretoken_offsets.keys())))
     # breakpoint()
 
-    profiler = cProfile.Profile()
-    profiler.enable()
-    for i in range(100):
+    profiler_train = cProfile.Profile()
+    profiler_train.enable()
+    for i in range(1000):
         start_time = timeit.default_timer()
         corpus_accessor.train_one_step()
         end_time = timeit.default_timer()
         print(f"Train step #{i} time: {end_time - start_time: .2f} seconds")
-    profiler.disable()
+    profiler_train.disable()
 
     # Print profiling results
-    stats = pstats.Stats(profiler).strip_dirs().sort_stats("cumulative")
+    stats = pstats.Stats(profiler_train).strip_dirs().sort_stats("cumulative")
     stats.print_stats()
 
     # Note: Saving the Heap and corpus_accessor after a few merges should retain full state

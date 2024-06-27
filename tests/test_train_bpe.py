@@ -25,7 +25,6 @@ def test_train_bpe_speed():
         special_tokens=["<|endoftext|>"],
     )
     end_time = time.time()
-    assert end_time - start_time < 1.5
     
     # Profile |run_train_bpe|
     profiler = cProfile.Profile()
@@ -39,6 +38,9 @@ def test_train_bpe_speed():
     # Print the profiling results
     stats = pstats.Stats(profiler)
     print(stats.sort_stats('time').print_stats(10))
+    
+    assert end_time - start_time < 1.5
+
 
 
 def test_train_bpe():
