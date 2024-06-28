@@ -92,6 +92,7 @@ def _find_token_pair_worker(
         ]
     return pretoken_id, filtered_locations
 
+
 # TODO: Since order of chunks doesn't matter as long as chunks are aligned with pre-token boundaries,
 #       split_corpus(): The file can be split into 100MB chunks, extending each chunk to cover a pre-token.
 #       Each corpus split can be independently processed and then the results can be aggregated.
@@ -488,9 +489,7 @@ class BpeTokenizerFileBasedTrainer:
     def add_special_tokens_to_vocab(self, special_tokens: List = []):
         # Add special tokens
         for sp_token in special_tokens:
-            self.vocab_set.add(sp_token.encode(
-                "utf-8"
-            ))
+            self.vocab_set.add(sp_token.encode("utf-8"))
 
 
 # Example usage
@@ -516,7 +515,9 @@ if __name__ == "__main__":
     import timeit
     import pickle
 
-    parser = argparse.ArgumentParser(description="File based tokenizer with checkpoint-loading")
+    parser = argparse.ArgumentParser(
+        description="File based tokenizer with checkpoint-loading"
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug messages")
     args = parser.parse_args()
     configure_logging(args.debug)

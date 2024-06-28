@@ -4,3 +4,5 @@ numpy
 pyyaml
 black # for lint-fixes: PEP 8 guideline adherance
 wandb # Use weights and biases service
+
+tokenizers # off-the-shelf from huggingface

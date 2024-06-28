@@ -566,7 +566,7 @@ def run_load_checkpoint(
     return load_checkpoint(src, model, optimizer)
     raise NotImplementedError
 
-
+from cs336_basics.bpe_tokenizer.encoder_decoder import BpePretrainedTokenizer
 def get_tokenizer(
     vocab: dict[int, bytes],
     merges: list[tuple[bytes, bytes]],
@@ -590,6 +590,7 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
+    return BpePretrainedTokenizer(vocab, merges, special_tokens)
     raise NotImplementedError
 
 from cs336_basics.bpe_tokenizer.fast_singlethread_tokenizer import train_bpe_from_file

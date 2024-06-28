@@ -46,12 +46,16 @@ class Utf8PreTokenTokenPairs:
     # idx at which a TokenPair exists in the PreToken.
     token_pairs: Dict[int, TokenPair]
     invalid_idx_set: set
+    pretoken_utf8_b: bytes
 
-    def __init__(self, pretoken_str: str):
-        pretoken_utf8_seq = pretoken_str.encode("utf-8")
+    def __init__(self, pretoken_str: str, token_vocab: Dict[bytes, int]):
+        self.pretoken_utf8_b = pretoken_str.encode("utf-8")
         self.token_pairs = {
-            idx: (pretoken_utf8_seq[idx], pretoken_utf8_seq[idx + 1])
-            for idx in range(len(pretoken_utf8_seq) - 1)
+            idx: (
+                token_vocab[self.pretoken_utf8_b[idx : idx + 1]],
+                token_vocab[self.pretoken_utf8_b[idx + 1 : idx + 2]],
+            )
+            for idx in range(len(self.pretoken_utf8_b) - 1)
         }
         self.invalid_idx_set = set()
 
@@ -79,29 +83,57 @@ class Utf8PreTokenTokenPairs:
     def token_length(self):
         return len(self.token_pairs) - len(self.invalid_idx_set)
 
+    def tokenize(self) -> List[int]:
+        out = []
+        ordered_token_pairs = [
+            self.token_pairs[loc]
+            for loc in sorted(self.token_pairs.keys())
+            if loc not in self.invalid_idx_set
+        ]
 
-TokenizationCorpus = List[Utf8PreTokenTokenPairs]
+        prev = None
+        for token_pair in ordered_token_pairs:
+            if token_pair[0] == prev:
+                out.append(token_pair[1])
+            else:
+                out.append(token_pair[0])
+                out.append(token_pair[1])
+            prev = token_pair[1]
+        return out
+
+
 # {Pretoken-ID: [List of locations in the pre-token]}
 PretokenLocations = Dict[int, List[int]]
 
 from collections import defaultdict
 
 
+class MergeResults:
+    def __init__(self) -> None:
+        # A set of all token-pairs whose counts will change to adjust max-heap
+        self.changed_token_pairs = set()
+        # Pretokens with singular tokens (if adj_next and adj_prev are None).
+        self.lonely_tokens = dict()  # pretoken --> token
+
+
 class TokenPairCorpusMap:
     # Initialize from |self.pretoken_token_pairs|
-    def __init__(self):
+    def __init__(self, corpus: Dict[int, Utf8PreTokenTokenPairs]):
         self.token_pair_corpus_info: Dict[TokenPair, PretokenLocations] = defaultdict(
             lambda: defaultdict(list)
         )
+        self.corpus = corpus
 
-    def process_corpus(self, corpus: TokenizationCorpus):
-        for pretoken_idx, pretoken_token_pairs in enumerate(corpus):
+        for pretoken_idx, pretoken_token_pairs in corpus.items():
             for location_idx, token_pair in pretoken_token_pairs.token_pairs.items():
                 # Since this function should be called before training, none of the locations should be invalid
                 assert location_idx not in pretoken_token_pairs.invalid_idx_set
                 self.add_pretoken_location_to_corpus_map(
                     token_pair, pretoken_idx, location_idx
                 )
+
+    def tokenize(self) -> Dict[int, List[int]]:
+        return {idx: el.tokenize() for idx, el in self.corpus.items()}
 
     def add_pretoken_location_to_corpus_map(
         self, token_pair: TokenPair, pretoken_idx: int, location_idx: int
@@ -128,6 +160,8 @@ class TokenPairCorpusMap:
                         del self.token_pair_corpus_info[token_pair]
 
     def get_token_pair_count(self, token_pair: TokenPair):
+        if token_pair not in self.token_pair_corpus_info:
+            return 0
         return sum(
             len(locations)
             for locations in self.token_pair_corpus_info[token_pair].values()
@@ -136,73 +170,72 @@ class TokenPairCorpusMap:
     def get_all_token_pairs(self):
         return self.token_pair_corpus_info.keys()
 
+    # Returns a set of tokens with changed counts
+    def merge_token(self, chosen_token_pair: TokenPair, new_token: int) -> MergeResults:
+        chosen_token_pair_pretoken_locations: PretokenLocations = (
+            self.token_pair_corpus_info[chosen_token_pair]
+        )
 
-# TokenTrie for efficient encoding of an arbitrary byte-string given a token vocabulary after training
-class ByteTrieNode:
-    # Ensure that each instance gets a separate dict.
-    def __init__(self):
-        # A dict {next-byte: ByteTrieNode}
-        self.children: dict = {}
-        self.token: int = None
+        results = MergeResults()
+        # NOTE: No need to update token_pair_corpus_map[chosen_token_pair] or
+        results.changed_token_pairs.add(chosen_token_pair)
+        for pretoken_idx, locations in chosen_token_pair_pretoken_locations.items():
+            for location in locations:
+                # Invalidate the current location
+                self.corpus[pretoken_idx].set_invalid(location)
 
+                # Find adjacent tokens:
+                adj_next = self.corpus[pretoken_idx].get_next_valid(
+                    location
+                )  # can return None
+                if adj_next is not None:
+                    # Update corpus map: Create new token pairs for next token pair
+                    next_loc, next_token_pair = adj_next
+                    new_token_pair_next = (new_token, next_token_pair[1])
+                    self.remove_pretoken_location_from_corpus_map(
+                        next_token_pair, pretoken_idx, next_loc
+                    )
+                    self.add_pretoken_location_to_corpus_map(
+                        new_token_pair_next, pretoken_idx, next_loc
+                    )
 
-class TokenTrieEncoderDecoder:
-    def __init__(self, token_vocab: Dict[int, bytes]):
-        self._root = ByteTrieNode()
-        self.valid = False
-        self.token_vocab = token_vocab
+                    # Update corpus
+                    self.corpus[pretoken_idx].token_pairs[
+                        next_loc
+                    ] = new_token_pair_next
 
-    def build(self):
-        for token, byte_string in self.token_vocab.items():
-            node = self._root
-            # Keep adding nodes if they don't exist already.
-            # At end of the loop, node->root should represent the token byte-string
-            for b in byte_string:
-                # TODO: Might be able to use a default-dict
-                if b not in node.children:
-                    node.children[b] = ByteTrieNode()
-                node = node.children[b]
-            node.token = token
+                    # Add changed token-pairs to change-list
+                    results.changed_token_pairs.add(next_token_pair)
+                    results.changed_token_pairs.add(new_token_pair_next)
 
-        self.valid = self._validate()
+                adj_prev = self.corpus[pretoken_idx].get_prev_valid(
+                    location
+                )  # can return None
+                if adj_prev is not None:
+                    # Update corpus map: Create new token pairs for next token pair
+                    prev_loc, prev_token_pair = adj_prev
+                    new_token_pair_prev = (prev_token_pair[0], new_token)
+                    self.remove_pretoken_location_from_corpus_map(
+                        prev_token_pair, pretoken_idx, prev_loc
+                    )
+                    self.add_pretoken_location_to_corpus_map(
+                        new_token_pair_prev, pretoken_idx, prev_loc
+                    )
+                    # Update corpus
+                    self.corpus[pretoken_idx].token_pairs[
+                        prev_loc
+                    ] = new_token_pair_prev
 
-    def _validate(self):
-        self._validate_children(self._root)
+                    # Add changed token-pairs to change-list
+                    results.changed_token_pairs.add(prev_token_pair)
+                    results.changed_token_pairs.add(new_token_pair_prev)
 
-    def _validate_children(self, start_node: ByteTrieNode):
-        """
-        Due to the nature of the vocabulary, each child-node in the Trie must have
-        """
-        for b, child_node in start_node.children.items():
-            assert child_node.token is not None, (
-                "ERROR: " + str(b) + ": Does not have an associated token-id."
-            )
-            self._validate_children(child_node)
+                if adj_next is None and adj_prev is None:
+                    results.lonely_tokens[pretoken_idx] = new_token
 
-    def tokenize(self, input_byte_str: bytes) -> List[int]:
-        # Convert the immutable byte string to a mutable bytearray
-        byte_array = bytearray(input_byte_str)
-        node = self._root
-        tokenized_str = []
-        while byte_array:
-            # Pop the first byte
-            first_byte = byte_array.pop(0)
-            if first_byte in node.children:
-                node = node.children[first_byte]
-            else:
-                # No more matching possible. Return token associated and process remaining string from root
-                assert node.token is not None
-                tokenized_str.append(node.token)
-                node = self._root
-        return tokenized_str
-
-    def encode(self, text: str):
-        """
-        Given a mapping of int --> byte-strings,
-        Uses a Trie for efficient lookups of incoming byte-strings to greedily .
-        """
-        assert self.valid, "Error: Trie is invalid."
-        return self.tokenize(text.encode("utf-8"))
+        # Remove merged token and return
+        del self.token_pair_corpus_info[chosen_token_pair]
+        return results
 
 
 # We store Token and counts in a custom heap to control efficiency during modificaitons
@@ -212,18 +245,18 @@ class MyBPETokenizer:
     USE_HEAP = True  # NOTE: Currently doesn't support lexicographic ordering...
 
     def __init__(self, text_corpus: str, special_tokens: List[str] = []):
-        # Initilize Utf8PreTokenBytePairs. This is a self-contained representation of the corpus.
-        # NOTE: As the token-vocabulary expands during training, some of these idx will become stale (will be marked invalid)
-        self.training_corpus: TokenizationCorpus = [
-            Utf8PreTokenTokenPairs(pretoken)
-            for pretoken in re.findall(PRETOKEN_PATTERN, text_corpus)
-        ]
         # Initialize special tokens before all others
         self.token_vocab: Dict[int, bytes] = {i: bytes([i]) for i in range(256)}
 
+        # Initilize Utf8PreTokenBytePairs. This is a self-contained representation of the corpus.
+        # NOTE: As the token-vocabulary expands during training, some of these idx will become stale (will be marked invalid)
+        training_corpus: TokenizationCorpus = [
+            Utf8PreTokenTokenPairs(pretoken, self.token_vocab)
+            for idx, pretoken in enumerate(re.findall(PRETOKEN_PATTERN, text_corpus))
+        ]
+
         # Initialize Token book-keeping (both dict and heap data-structures)
-        self.token_pair_corpus_map = TokenPairCorpusMap()
-        self.token_pair_corpus_map.process_corpus(self.training_corpus)
+        self.token_pair_corpus_map = TokenPairCorpusMap(training_corpus)
         self.token_pair_priority_queue = ModifiablePriorityQueue.heapify(
             [
                 HeapItem(
@@ -240,10 +273,8 @@ class MyBPETokenizer:
         # Special tokens are only added to the vocabulary after training
         self.special_tokens = special_tokens
 
-        # merges: list[tuple[bytes, bytes]]
-        #      BPE merges. Each list item is a tuple of bytes (<token1>, <token2>),
-        #      representing that <token1> was merged with <token2>.
-        #      Merges are ordered by order of creation.
+        # merges: list[tuple[bytes, bytes]] representing an merged token-pairs ordered list training.
+        # The ordering is key for the encoding algorithms
         self.merges = []
 
     def get_merges(self) -> List[Tuple]:
@@ -259,8 +290,8 @@ class MyBPETokenizer:
 
     def get_vocab(self) -> Dict[int, bytes]:
         # vocab: dict[int, bytes]
-        #       The trained tokenizer vocabulary, a mapping from int (token ID in the vocabulary)
-        #       to bytes (token bytes)
+        # The trained tokenizer vocabulary, a mapping from int (token ID in the vocabulary)
+        # to bytes (token bytes)
         return self.token_vocab
 
     def vocab_size(self) -> int:
@@ -299,83 +330,16 @@ class MyBPETokenizer:
             )
             freq = self.token_pair_corpus_map.get_token_pair_count(chosen_token_pair)
 
-        # print(f"Merge #{len(self.merges) + 1} {token_seq_to_bytes(chosen_token_pair, self.token_vocab)} with freq: {freq}")
-
-        chosen_token_pair_pretoken_locations: PretokenLocations = (
-            self.token_pair_corpus_map.token_pair_corpus_info[chosen_token_pair]
-        )
-
         # Create a new token (increment token-vocab size) representing the token_pair, concatenating bytes from associated existing tokens
         new_token = len(self.token_vocab)
         new_merged_bytestring_pair = tuple(map(self.token_vocab.get, chosen_token_pair))
         self.merges.append(new_merged_bytestring_pair)
         self.token_vocab[new_token] = b"".join(new_merged_bytestring_pair)
 
-        # Update |token_pair_corpus_map|: Find all affected token-pairs adjacent to this token in the pretoken corpus
-        # Maintain a set of all token-pairs whose counts will change to adjust max-heap
-        changed_token_pairs = set()
-        # NOTE: No need to update token_pair_corpus_map[chosen_token_pair] or
-        # changed_token_pairs.add(chosen_token_pair) since chosen_token_pair will never appear again during training.
-        for pretoken_idx, locations in chosen_token_pair_pretoken_locations.items():
-            for location in locations:
-                # Invalidate the current location
-                self.training_corpus[pretoken_idx].set_invalid(location)
-
-                # Find adjacent tokens:
-                adj_next = self.training_corpus[pretoken_idx].get_next_valid(
-                    location
-                )  # can return None
-                if adj_next is not None:
-                    # Update corpus map: Create new token pairs for next token pair
-                    next_loc, next_token_pair = adj_next
-                    new_token_pair_next = (new_token, next_token_pair[1])
-                    self.token_pair_corpus_map.remove_pretoken_location_from_corpus_map(
-                        next_token_pair, pretoken_idx, next_loc
-                    )
-                    self.token_pair_corpus_map.add_pretoken_location_to_corpus_map(
-                        new_token_pair_next, pretoken_idx, next_loc
-                    )
-
-                    # Update corpus
-                    self.training_corpus[pretoken_idx].token_pairs[
-                        next_loc
-                    ] = new_token_pair_next
-
-                    # Add changed token-pairs to change-list
-                    changed_token_pairs.add(next_token_pair)
-                    changed_token_pairs.add(new_token_pair_next)
-
-                adj_prev = self.training_corpus[pretoken_idx].get_prev_valid(
-                    location
-                )  # can return None
-                if adj_prev is not None:
-                    # Update corpus map: Create new token pairs for next token pair
-                    prev_loc, prev_token_pair = adj_prev
-                    new_token_pair_prev = (prev_token_pair[0], new_token)
-                    self.token_pair_corpus_map.remove_pretoken_location_from_corpus_map(
-                        prev_token_pair, pretoken_idx, prev_loc
-                    )
-                    self.token_pair_corpus_map.add_pretoken_location_to_corpus_map(
-                        new_token_pair_prev, pretoken_idx, prev_loc
-                    )
-                    # Update corpus
-                    self.training_corpus[pretoken_idx].token_pairs[
-                        prev_loc
-                    ] = new_token_pair_prev
-
-                    # Add changed token-pairs to change-list
-                    changed_token_pairs.add(prev_token_pair)
-                    changed_token_pairs.add(new_token_pair_prev)
-
-        # !! Trying Alternative:  Remove from dict
-        del self.token_pair_corpus_map.token_pair_corpus_info[chosen_token_pair]
-        # debug_list = [b'ce', b'le', b'@-@', b' are']
-        # for changed_tk in changed_token_pairs:
-        #     bytes_changed = token_seq_to_bytes(changed_tk, self.token_vocab)
-        #     if bytes_changed in debug_list:
-        #         print(
-        #             f"Change --> {bytes_changed}: {self.token_pair_corpus_map.get_token_pair_count(changed_tk)} occurrances"
-        #         )
+        # Update map with new token
+        changed_token_pairs = self.token_pair_corpus_map.merge_token(
+            chosen_token_pair, new_token
+        ).changed_token_pairs
 
         # Update priority queue
         if self.USE_HEAP:
@@ -416,3 +380,76 @@ if __name__ == "__main__":
     vocab, merges = train_bpe(test_string, 264)
     print(f"Vocab: {vocab}\n------\n")
     print(f"Merges: {merges}")
+
+
+# NOTE: This is incorrect. A trie is used for max-matching in-order of input. While this may seem intuitive,
+#       this does not preserve the most-frequent tokens first and would result in a longer tokenization
+#       E.g. if "they" is to be tokenized and we have a seq of merges [(t, h), (e, y), (th, e)]
+#
+#
+# # TokenTrie for efficient encoding of an arbitrary byte-string given a token vocabulary after training
+# class ByteTrieNode:
+#     # Ensure that each instance gets a separate dict.
+#     def __init__(self):
+#         # A dict {next-byte: ByteTrieNode}
+#         self.children: dict = {}
+#         self.token: int = None
+
+
+# class TokenTrieEncoderDecoder:
+#     def __init__(self, token_vocab: Dict[int, bytes]):
+#         self._root = ByteTrieNode()
+#         self.valid = False
+#         self.token_vocab = token_vocab
+
+#     def build(self):
+#         for token, byte_string in self.token_vocab.items():
+#             node = self._root
+#             # Keep adding nodes if they don't exist already.
+#             # At end of the loop, node->root should represent the token byte-string
+#             for b in byte_string:
+#                 # TODO: Might be able to use a default-dict
+#                 if b not in node.children:
+#                     node.children[b] = ByteTrieNode()
+#                 node = node.children[b]
+#             node.token = token
+
+#         self.valid = self._validate()
+
+#     def _validate(self):
+#         self._validate_children(self._root)
+
+#     def _validate_children(self, start_node: ByteTrieNode):
+#         """
+#         Due to the nature of the vocabulary, each child-node in the Trie must have
+#         """
+#         for b, child_node in start_node.children.items():
+#             assert child_node.token is not None, (
+#                 "ERROR: " + str(b) + ": Does not have an associated token-id."
+#             )
+#             self._validate_children(child_node)
+
+#     def tokenize(self, input_byte_str: bytes) -> List[int]:
+#         # Convert the immutable byte string to a mutable bytearray
+#         byte_array = bytearray(input_byte_str)
+#         node = self._root
+#         tokenized_str = []
+#         while byte_array:
+#             # Pop the first byte
+#             first_byte = byte_array.pop(0)
+#             if first_byte in node.children:
+#                 node = node.children[first_byte]
+#             else:
+#                 # No more matching possible. Return token associated and process remaining string from root
+#                 assert node.token is not None
+#                 tokenized_str.append(node.token)
+#                 node = self._root
+#         return tokenized_str
+
+#     def encode(self, text: str):
+#         """
+#         Given a mapping of int --> byte-strings,
+#         Uses a Trie for efficient lookups of incoming byte-strings to greedily .
+#         """
+#         assert self.valid, "Error: Trie is invalid."
+#         return self.tokenize(text.encode("utf-8"))
