@@ -174,13 +174,7 @@ class BpePretrainedTokenizer:
         #    if the entire pre-token is in the vocab
         # pretokens = self.pretoken_regex.findall(text)
         pretokens = prioritized_regex_matching(text, self.regex_list)
-
-        # TODO: Any character that's not pretokenized
-
-        print(f"Pretokens generated: {pretokens}")
-        # breakpoint()
-        # Debug
-        self.last_pretokens = pretokens
+        # print(f"Pretokens generated: {pretokens}")
 
         # Store indices where this edge-case applies; we will not use merge-list algorithm here.
         singular_pretoken_ids = set()
