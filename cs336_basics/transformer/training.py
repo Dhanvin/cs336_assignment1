@@ -167,28 +167,8 @@ def lr_cosine_scheduling(
         max_learning_rate - min_learning_rate
     ) * (
         1.0 + math.cos(frac_it * math.pi)
-    )  #
+    )  
     return cosine_oscillation
-
-
-# NOTE: Choosing not to use this because it feels like an unnecessary abstraction for this assignment.
-#       If we create such a class, we also need to store state during checkpointing
-# class CosineAnealingScheduler(_LRScheduler):
-#     def __init__(self, optimizer, max_learning_rate: float,
-#     min_learning_rate: float,
-#     warmup_iters: int,
-#     cosine_cycle_iters: int):
-#         self.max_learning_rate = max_learning_rate
-#         self.min_learning_rate = min_learning_rate
-#         self.warmup_iters = warmup_iters
-#         self.cosine_cycle_iters = cosine_cycle_iters
-#         super().__init__(optimizer)
-
-#     def get_lr(self):
-#         return lr_cosine_scheduling(self.last_epoch + 1,
-#                                     self.max_learning_rate,
-#                                     self.min_learning_rate,
-#                                     self.warmup_iters, self.cosine_cycle_iters)
 
 
 def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float):
@@ -277,8 +257,7 @@ def get_batch(
         low=0, high=valid_start_idx, size=(batch_size, 1)
     ) + np.arange(context_length)
     batch_target_idx = batch_input_idx + 1
-    # NOTE:
-    # Read-only numpy arrays won't work with torch.from_numpy.
+    # NOTE: Read-only numpy arrays won't work with torch.from_numpy.
     # This is because torch.tensor will share memory with this array and needs
     # write access.
     assert dataset.flags.writeable
@@ -301,8 +280,6 @@ def get_batch(
 ### Checkpointing
 # str, os.PathLike: string or bytes object representing a file system path
 # BinaryIO | IO[bytes]: binary file-like object
-
-
 def save_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,

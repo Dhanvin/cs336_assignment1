@@ -1,11 +1,27 @@
 import os
 import argparse
 import torch
+import numpy as np
 import wandb  # For logging losses
 
-from transformer_lm import TransformerModel
-from training import cross_entropy_loss, AdamW, lr_cosine_scheduling, gradient_clipping
-from training import save_checkpoint, load_checkpoint
+from cs336_basics.transformer.transformer_lm import TransformerModel
+from cs336_basics.transformer.training import cross_entropy_loss, AdamW, lr_cosine_scheduling, gradient_clipping
+from cs336_basics.transformer.training import save_checkpoint, load_checkpoint
+from cs336_basics.transformer.training import get_batch
+
+# TODO(slinky): 
+#   - How should we initilize weights for training, especially for the Position embedding layer and token encoding layer
+#   - model.vocab_size should be derived from tokenizer? What is the relation between model vocabulary size and tokenizer vocabulary size? 
+#       - Would I need to retrian the tokenizer and regenerate the tokens if I provide a different vocab size? 
+#       - However, in our case, we also provide info during encoding of the input corpus (special characters). Does this mean I should store the vocab size together with the 
+#       - Currently the final vocab is formed after. BpePretrainedTokenizer is created. 
+#           * Maybe I can pickle the file after creation and pass the tokenizer-path as a cmd-line arg for training.
+#           * For convenience, the picked tokenizer file can live in the same directory as the tokenized data-set (related)
+
+# TODO(dhanvin):
+#   - Move the vocab <> merges reconciliation logic that's currently in the encoder directly into the tokenization trainer (huggingface). 
+#       - This will ensure that the saved vocab 
+#   
 
 
 def get_device():
@@ -16,11 +32,13 @@ def get_device():
         return torch.device("cpu")
 
 
-def train(args, name: str):
-    wandb.init(project=f"cs336-train-{name}")
+def train(args, experiment_name: str):
+    wandb.init(project=f"cs336-train-{experiment_name}")
 
+    # TODO: Get |vocab_size| from tokenizer. 
+    vocab_size,
     model = TransformerModel(
-        args.vocab_size,
+        vocab_size,
         args.context_length,
         args.num_layers,
         args.d_model,
@@ -38,19 +56,25 @@ def train(args, name: str):
         eps=1e-8,
     )
 
-    # Load data-set from args.data_path and estimate |sample_size|
-    sample_size = 99999
-    # Initialize data-loader and estimate sample-size
 
-    iters_per_epochs = int(sample_size / float(args.batch_size))
-    max_num_iters = float(args.total_train_tokens) / (
-        float(args.batch_size) * float(args.context_length)
-    )
+    # Load tokenized data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
+    training_dataset_mmaped = np.load(args.training_dataset, mmap_mode='r+')
+    assert training_dataset_mmaped.dtype == np.uint16
+
+
+    ntokens_per_epoch = len(training_dataset_mmaped)
+    ntokens_per_iter = float(args.batch_size) * float(args.context_length)
+    iters_per_epochs = int(ntokens_per_epoch / ntokens_per_iter)
+
+    max_num_iters = float(args.total_train_tokens) / ntokens_per_iter
     total_epochs = max_num_iters / iters_per_epochs
     print(
         f"Training configured for {max_num_iters} iterations with {args.batch_size} batch-size spanning {total_epochs} epochs"
     )
 
+    # Set to 5 epochs (don't know why)
+    cosine_cycle_iters = iters_per_epochs * 5
+    
     # Load checkpoint if exists
     start_iter = 0
     if os.path.exists(args.checkpoint_path):
@@ -59,10 +83,10 @@ def train(args, name: str):
 
     checkpoint_freq = 1000  # iters
 
-    # Compute Epoch
-    for niter in range(start_iter, num_train_steps):
+    # Start training
+    for niter in range(start_iter, max_num_iters):
         # Get data
-        x, y = get_batch(B=B)
+        x, y = get_batch(training_dataset_mmaped, args.batch_size, args.context_length, device='cpu')
 
         # Forward (compute loss)
         pred_y = model(x)
@@ -79,14 +103,13 @@ def train(args, name: str):
         for param_group, lr in zip(
             optimizer.param_groups,
             lr_cosine_scheduling(
-                niter, args.lr_max, args.lr_min, args.warmup_iters, iters_per_epochs * 5
+                niter, args.lr_max, args.lr_min, args.warmup_iters, cosine_cycle_iters
             ),
         ):
             param_group["lr"] = lr
 
         current_lr = optimizer.param_groups[0]["lr"]
-        niters = lr_scheduler.last_epoch + 1
-        print(f"Iter {lr_scheduler.last_epoch + 1}, Learning Rate: {current_lr}")
+        print(f"Iter {niter}, Learning Rate: {current_lr}")
 
         # Finally update model params based on gradient
         optimizer.step()
@@ -98,14 +121,10 @@ def train(args, name: str):
         # (e.g., in reinforcement learning or certain optimization techniques) but we don't want it here.
         optimizer.zero_grad(set_to_none=True)
 
-        if niters % checkpoint_freq == 0:
-            save_checkpoint(model, optimizer, model, args.checkpoint_path)
+        if niter % checkpoint_freq == 0:
+            save_checkpoint(model, optimizer, niter, args.checkpoint_path)
 
-
-def main():
-    """
-    Parses CLI args and calls train()
-    """
+def create_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="The training loop for Transformer Model using AdamW regularizer."
     )
@@ -188,8 +207,10 @@ def main():
     )
 
     # Info for training
+    trainer_cli.add_argument("name", help="Name given to training run.")
     trainer_cli.add_argument("checkpoint_path", help="Path to checkpoint.")
-    trainer_cli.add_argument("data_path", help="Path to training data.")
+    trainer_cli.add_argument("training_dataset", help="Path to tokenized training data.")
+    trainer_cli.add_argument("validation_dataset", help="Path to tokenized validation data.")
     trainer_cli.add_argument("batch_size", nargs="?", default=4, help="")
     trainer_cli.add_argument(
         "total_train_tokens",
@@ -203,11 +224,13 @@ def main():
         "-v", "--verbose", action="store_true", help="Increase output verbosity"
     )
 
-    args = parser.parse_args()
 
-    # print(f'Input file: {args.input_file}')
-    # if args.verbose:
-    #     print('Verbose mode is on')
+def main():
+    """
+    Parses CLI args and calls train()
+    """
+    args = create_arg_parser().parse_args()
+    train(args, 'test')
 
 
 if __name__ == "__main__":

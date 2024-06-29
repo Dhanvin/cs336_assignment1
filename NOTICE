@@ -1,0 +1,4 @@
+This project uses the Huggingface Tokenizer library, which is licensed under the Apache License 2.0.
+
+Huggingface Tokenizer: https://github.com/huggingface/tokenizers
+License: http://www.apache.org/licenses/LICENSE-2.0

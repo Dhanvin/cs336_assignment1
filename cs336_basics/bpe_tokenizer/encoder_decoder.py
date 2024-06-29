@@ -6,6 +6,7 @@
 from typing import List, Dict, Tuple, Iterable, Iterator
 import json
 import pathlib
+import itertools
 
 from .fast_singlethread_tokenizer import (
     Utf8PreTokenTokenPairs,
@@ -41,7 +42,7 @@ def prioritized_regex_matching(
         # Replace the characters at all the specified indices with spaces
         # TODO(@dmehta) -- BUG: Consider using another character that is not a space.
         for i in all_indices:
-            mutating_text_list[i] = " "
+            mutating_text_list[i] = "\x00"
         mutating_text = "".join(mutating_text_list)
 
     # Sort matches first by priority (lowest number = highest priority), then by start position
@@ -274,7 +275,7 @@ class BpePretrainedTokenizer:
 
 import timeit
 import numpy as np
-from cs336_basics.training import get_batch
+from cs336_basics.transformer.training import get_batch
 # python -m cs336_basics.bpe_tokenizer.encoder_decoder
 if __name__ == "__main__":
 

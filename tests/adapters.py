@@ -9,7 +9,7 @@ import torch
 import cProfile
 import pstats
 
-from cs336_basics.transformer_lm import PositionwiseFeedForward
+from cs336_basics.transformer.transformer_lm import PositionwiseFeedForward
 def run_positionwise_feedforward(
     d_model: int,
     d_ff: int,
@@ -52,7 +52,7 @@ def run_positionwise_feedforward(
     raise NotImplementedError
 
 
-from cs336_basics.transformer_lm import scaled_dot_product_attention
+from cs336_basics.transformer.transformer_lm import scaled_dot_product_attention
 def run_scaled_dot_product_attention(
     K: torch.FloatTensor,
     Q: torch.FloatTensor,
@@ -95,7 +95,7 @@ def run_scaled_dot_product_attention(
     return scaled_dot_product_attention(K, Q, V, mask, pdrop)
     raise NotImplementedError
 
-from cs336_basics.transformer_lm import CausalMultiheadSelfAttention
+from cs336_basics.transformer.transformer_lm import CausalMultiheadSelfAttention
 def run_multihead_self_attention(
     d_model: int,
     num_heads: int,
@@ -148,7 +148,7 @@ def run_multihead_self_attention(
     return self_attention_layer.forward(in_features)
     raise NotImplementedError
 
-from cs336_basics.transformer_lm import TransformerLayer
+from cs336_basics.transformer.transformer_lm import TransformerLayer
 
 def modify_state_dict_for_multihead_transformer_layer(d_model: int, num_heads: int, 
                                                       weights: dict[str, torch.FloatTensor], 
@@ -243,7 +243,7 @@ def run_transformer_block(
     return transformer_block.forward(in_features)
     raise NotImplementedError
 
-from cs336_basics.transformer_lm import TransformerModel
+from cs336_basics.transformer.transformer_lm import TransformerModel
 def run_transformer_lm(
     vocab_size: int,
     context_length: int,
@@ -342,7 +342,7 @@ def run_transformer_lm(
     raise NotImplementedError
 
 
-from cs336_basics.transformer_lm import RmsNorm, gelu_activation
+from cs336_basics.transformer.transformer_lm import RmsNorm, gelu_activation
 def run_rmsnorm(
     d_model: int,
     eps: float,
@@ -391,7 +391,7 @@ def run_gelu(in_features: torch.FloatTensor) -> torch.FloatTensor:
     """
     return gelu_activation(in_features)
 
-from cs336_basics.training import get_batch
+from cs336_basics.transformer.training import get_batch
 import numpy as np
 def run_get_batch(
     dataset: npt.NDArray, batch_size: int, context_length: int, device: str
@@ -421,7 +421,7 @@ def run_get_batch(
     return get_batch(dataset, batch_size, context_length, device)
     raise NotImplementedError
 
-from cs336_basics.transformer_lm import softmax
+from cs336_basics.transformer.transformer_lm import softmax
 def run_softmax(in_features: torch.FloatTensor, dim: int) -> torch.FloatTensor:
     """Given a tensor of inputs, return the output of softmaxing the given `dim`
     of the input.
@@ -439,7 +439,7 @@ def run_softmax(in_features: torch.FloatTensor, dim: int) -> torch.FloatTensor:
     return softmax(in_features, dim)
     raise NotImplementedError
 
-from cs336_basics.training import cross_entropy_loss
+from cs336_basics.transformer.training import cross_entropy_loss
 def run_cross_entropy(inputs: torch.FloatTensor, targets: torch.LongTensor):
     """Given a tensor of inputs and targets, compute the average cross-entropy
     loss across examples.
@@ -458,7 +458,7 @@ def run_cross_entropy(inputs: torch.FloatTensor, targets: torch.LongTensor):
     return cross_entropy_loss(inputs, targets)
     raise NotImplementedError
 
-from cs336_basics.training import gradient_clipping
+from cs336_basics.transformer.training import gradient_clipping
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float):
     """Given a set of parameters, clip their combined gradients to have l2 norm at most max_l2_norm.
 
@@ -473,7 +473,7 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
     """
     gradient_clipping(parameters, max_l2_norm)
 
-from cs336_basics.training import AdamW
+from cs336_basics.transformer.training import AdamW
 def get_adamw_cls() -> Type[torch.optim.Optimizer]:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
@@ -482,7 +482,7 @@ def get_adamw_cls() -> Type[torch.optim.Optimizer]:
     raise NotImplementedError
 
 
-from cs336_basics.training import lr_cosine_scheduling
+from cs336_basics.transformer.training import lr_cosine_scheduling
 def run_get_lr_cosine_schedule(
     it: int,
     max_learning_rate: float,
@@ -517,7 +517,7 @@ def run_get_lr_cosine_schedule(
     raise NotImplementedError
 
 
-from cs336_basics.training import save_checkpoint, load_checkpoint
+from cs336_basics.transformer.training import save_checkpoint, load_checkpoint
 def run_save_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
