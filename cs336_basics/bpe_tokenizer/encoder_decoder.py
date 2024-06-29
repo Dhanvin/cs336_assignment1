@@ -3,7 +3,7 @@
 # Input:
 #   merges.txt file, with an frequency-ordered set of merges during training
 #   vocab.json file, a mapping from tokens to
-from typing import List, Dict, Tuple, Iterable, Iterator
+from typing import List, Dict, Tuple, Iterable, Iterator, Generator
 import json
 import pathlib
 import itertools
@@ -17,22 +17,74 @@ from .fast_singlethread_tokenizer import (
 import regex as re
 
 
+def prioritized_regex_matching(
+    input_text: str, regex_list: List[re.Pattern]
+) -> List[str]:
+    all_matches = []
+
+    # Iterate through the regex patterns in order of priority
+    # NOTE: substitute by spaces so that we aren't missing other tokens outside that might regex to
+    #       the lowest-priority pattern
+    mutating_text = input_text
+    for priority, regex in enumerate(regex_list):
+        substitute_spaces_at = []
+        # Find all non-overlapping matches for the current regex
+        for match in regex.finditer(mutating_text):
+            all_matches.append((match.start(), match.end(), match.group(), priority))
+            substitute_spaces_at.append((match.start(), match.end()))
+
+        all_indices = list(
+            itertools.chain.from_iterable(
+                range(start, end) for start, end in substitute_spaces_at
+            )
+        )
+        mutating_text_list = list(mutating_text)
+        # Replace the characters at all the specified indices with spaces
+        for i in all_indices:
+            mutating_text_list[i] = " "
+        mutating_text = "".join(mutating_text_list)
+
+    # Sort matches first by priority (lowest number = highest priority), then by start position
+    prioritized_matches = sorted(all_matches, key=lambda x: (x[3], x[0]))
+
+    unique_matches: List[Tuple] = []
+    covered_positions = set()
+
+    for start, end, matched_text, _ in prioritized_matches:
+        # Check if this match overlaps with any previously covered position
+        if any(pos in covered_positions for pos in range(start, end)):
+            continue
+        # Add to result
+        unique_matches.append((start, matched_text))
+        covered_positions.update(range(start, end))
+
+    # Sort by start position
+    ordered_matches = sorted(unique_matches, key=lambda x: x[0])
+    return [match[1] for match in ordered_matches]
+
+
 class BpePretrainedTokenizer:
     # self.ordered_merges: List[Tuple[bytes, bytes]]
     def __init__(
         self,
         vocab: Dict[int, bytes],
         merges=List[Tuple[bytes, bytes]],
-        special_tokens=None,
+        special_tokens: List[str] = None,
     ):
         self.ordered_merges = merges
         self.vocab = vocab
+        # Sort keywords by length in descending order. This will prioritize merges peroperly in |pattern_match_with_special_keywords()|
+        self.sorted_special_tokens = (
+            sorted(special_tokens, key=len, reverse=True)
+            if special_tokens is not None
+            else None
+        )
 
         # If a pretoken is in the vocab, we directly tokenize it and don't take it to the merging process
         if special_tokens:
             for sp in special_tokens:
                 sp_b = sp.encode("utf-8")
-                self.vocab[sp_b] = len(self.vocab)
+                self.vocab[len(self.vocab)] = sp_b
 
         # breakpoint()
         # For efficiency while encoding,
@@ -46,6 +98,16 @@ class BpePretrainedTokenizer:
             ): rank
             for rank, bytes_pair in enumerate(self.ordered_merges)
         }
+
+        self.pretoken_regex = re.compile(PRETOKEN_PATTERN)
+        # Prioritized list of compiled regular expressions
+        if self.sorted_special_tokens:
+            self.regex_list = [
+                re.compile(rf"{re.escape(word)}") for word in self.sorted_special_tokens
+            ]
+            self.regex_list += [re.compile(PRETOKEN_PATTERN)]  # Lowest priority
+        else:
+            self.regex_list = [re.compile(PRETOKEN_PATTERN)]
 
     # Class method that constructs and return a Tokenizer from a serialized vocabulary and list of merges
     @classmethod
@@ -105,8 +167,20 @@ class BpePretrainedTokenizer:
         # Used for producing output
         tokenized_pretokens: Dict[int, List[int]] = {}  # {pretoken-idx: List[tokens]}
 
-        pretokens = re.findall(PRETOKEN_PATTERN, text)
-        print(pretokens)
+        # In order to retain the special strings in an input string through the
+        # encoder - decoder round-trip, we:
+        # 1) Augment the regex with matching for special so they become separate tokens.
+        # 2) Add the special strings to the vocab and skip merge-list based encoding
+        #    if the entire pre-token is in the vocab
+        # pretokens = self.pretoken_regex.findall(text)
+        pretokens = prioritized_regex_matching(text, self.regex_list)
+
+        # TODO: Any character that's not pretokenized
+
+        print(f"Pretokens generated: {pretokens}")
+        # breakpoint()
+        # Debug
+        self.last_pretokens = pretokens
 
         # Store indices where this edge-case applies; we will not use merge-list algorithm here.
         singular_pretoken_ids = set()
@@ -179,31 +253,60 @@ class BpePretrainedTokenizer:
             - A generator that lazily yields token IDs.
         This is required for memory-eﬀicient tokenization of large files that we cannot directly load into memory.
         """
-        pass
+        token_buffer: List[int] = []
+        while True:
+            if token_buffer:
+                yield token_buffer.pop(0)  # Remove and return in order of insertion
+            else:
+                try:
+                    line = next(
+                        iterable
+                    )  # If iterable is a file in 'r' mode, this returns a line
+                except StopIteration:
+                    print("Iterator has ended.")
+                    break
+                token_buffer += self.encode(line)
+                yield token_buffer.pop(0)
 
     # Decode a sequence of token IDs into text.
     def decode(self, ids: List[int]) -> str:
-        pass
+        utf8_str = b"".join([self.vocab[token] for token in ids])
+        return utf8_str.decode("utf-8", errors="replace")
 
 
 # python -m cs336_basics.bpe_tokenizer.encoder_decoder
 if __name__ == "__main__":
-    TOKENIZER_PATH = (
-        (pathlib.Path(__file__).resolve()).parent.parent.parent
-        / "data"
-        / "TinyStories-tokenizer"
-    )
-    vocab_path = str(TOKENIZER_PATH / "vocab.json")
-    merge_path = str(TOKENIZER_PATH / "merges.txt")
+    # TOKENIZER_PATH = (
+    #     (pathlib.Path(__file__).resolve()).parent.parent.parent
+    #     / "data"
+    #     / "TinyStories-tokenizer"
+    # )
+    # vocab_path = str(TOKENIZER_PATH / "vocab.json")
+    # merge_path = str(TOKENIZER_PATH / "merges.txt")
 
-    # TOKENIZER_PATH = (pathlib.Path(__file__).resolve()).parent.parent.parent / 'tests' / 'fixtures'
-    # vocab_path = str(TOKENIZER_PATH / 'gpt2_vocab.json')
-    # merge_path = str(TOKENIZER_PATH / 'gpt2_merges.txt')
+    # tokenizer = BpePretrainedTokenizer.from_files(
+    #     vocab_path, merge_path, special_tokens=["<|endoftext|>"]
+    # )
+    # text = "This is awesome     yablasdf32"
+    # encoded_tokens = tokenizer.encode(text)
+    # encoded_byte_seq = [tokenizer.vocab[token] for token in encoded_tokens]
+    # print(f"Encoded: '{text}' --> {encoded_tokens} == {encoded_byte_seq}")
+
+    TOKENIZER_PATH = (
+        (pathlib.Path(__file__).resolve()).parent.parent.parent / "tests" / "fixtures"
+    )
+    vocab_path = str(TOKENIZER_PATH / "gpt2_vocab.json")
+    merge_path = str(TOKENIZER_PATH / "gpt2_merges.txt")
 
     tokenizer = BpePretrainedTokenizer.from_files(
         vocab_path, merge_path, special_tokens=["<|endoftext|>"]
     )
-    text = "This is awesome     yablasdf32"
-    encoded_tokens = tokenizer.encode(text)
-    encoded_byte_seq = [tokenizer.vocab[token] for token in encoded_tokens]
-    print(f"Encoded: '{text}' --> {encoded_tokens} == {encoded_byte_seq}")
+    test_string = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
+    encoded_ids = tokenizer.encode(test_string)
+    # breakpoint()
+    tokenized_string = [tokenizer.decode([x]) for x in encoded_ids]
+    breakpoint()
+    # Ensure the special <|endoftext|> token is preserved
+    assert tokenized_string.count("<|endoftext|>") == 3
+
+    decoded_string = tokenizer.decode(encoded_ids)
