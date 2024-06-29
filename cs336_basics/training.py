@@ -224,6 +224,23 @@ def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: flo
 ### Data-Loading
 import numpy.typing as npt
 
+# Create a dictionary to map NumPy dtypes to PyTorch dtypes
+np_torch_type_mapping = {
+    np.float32: torch.float32,
+    np.float64: torch.float64,
+    np.int16: torch.int16,
+    np.int32: torch.int32,
+    np.int64: torch.int64,
+    np.uint8: torch.uint8,
+}
+
+# Unsigned numpy dtypes are not compatible with 
+# Torch. First convert them to an appropriate type
+torch_compatible_dtype_map = {
+    np.uint16: np.int32,
+    np.uint32: np.int64
+}
+
 
 def get_batch(
     dataset: npt.NDArray, batch_size: int, context_length: int, device: str
@@ -250,7 +267,7 @@ def get_batch(
         language modeling labels.
     """
     # Check if dataset is memory-mapped
-    if isinstance(dataset.base, np.memmap):
+    if type(dataset) == np.memmap:
         print("dataset is memory-mapped.")
     else:
         print("dataset is not memory-mapped.")
@@ -260,15 +277,24 @@ def get_batch(
         low=0, high=valid_start_idx, size=(batch_size, 1)
     ) + np.arange(context_length)
     batch_target_idx = batch_input_idx + 1
-    assert (
-        dataset.flags.writeable
-    )  # Read-only numpy arrays won't work with torch.from_numpy
+    # NOTE:
+    # Read-only numpy arrays won't work with torch.from_numpy.
+    # This is because torch.tensor will share memory with this array and needs
+    # write access.
+    assert dataset.flags.writeable
+    # Convert uint16 to 
     # Use numpy advanced indexing
-    input_seq = torch.from_numpy(dataset[batch_input_idx]).to(device)
+    if dataset.dtype.type in torch_compatible_dtype_map:
+        input_batch_np = dataset[batch_input_idx].astype(torch_compatible_dtype_map[dataset.dtype.type])
+        target_batch_np = dataset[batch_target_idx].astype(torch_compatible_dtype_map[dataset.dtype.type])
+    else:
+        input_batch_np = dataset[batch_input_idx]
+        target_batch_np = dataset[batch_target_idx]
+    input_seq = torch.from_numpy(input_batch_np).to(device)
     assert (
-        input_seq.dtype == torch.long
+        input_seq.dtype == np_torch_type_mapping[input_batch_np.dtype.type]
     )  # Input numpy array is int64 so no explicit conversion is required
-    target_seq = torch.from_numpy(dataset[batch_target_idx]).to(device)
+    target_seq = torch.from_numpy(target_batch_np).to(device)
     return (input_seq, target_seq)
 
 

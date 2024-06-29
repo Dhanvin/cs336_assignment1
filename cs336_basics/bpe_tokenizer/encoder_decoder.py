@@ -3,10 +3,9 @@
 # Input:
 #   merges.txt file, with an frequency-ordered set of merges during training
 #   vocab.json file, a mapping from tokens to
-from typing import List, Dict, Tuple, Iterable, Iterator, Generator
+from typing import List, Dict, Tuple, Iterable, Iterator
 import json
 import pathlib
-import itertools
 
 from .fast_singlethread_tokenizer import (
     Utf8PreTokenTokenPairs,
@@ -40,6 +39,7 @@ def prioritized_regex_matching(
         )
         mutating_text_list = list(mutating_text)
         # Replace the characters at all the specified indices with spaces
+        # TODO(@dmehta) -- BUG: Consider using another character that is not a space.
         for i in all_indices:
             mutating_text_list[i] = " "
         mutating_text = "".join(mutating_text_list)
@@ -144,7 +144,7 @@ class BpePretrainedTokenizer:
                     # the merge-pair ordering during encoding. Instead, we collect these special strings and
                     # pass it to Utf8PreTokenTokenPairs during initial tokenization of the pretoken prior to
                     # kicking off the encoding algorithm
-                    if merge_strings[1] == "":
+                    if merge_strings[1] == "" and merge_strings[0] not in json_vocab_dict:
                         special_tokens.append(merge_strings[0])
                     else:
                         print(
@@ -208,14 +208,14 @@ class BpePretrainedTokenizer:
         while True:
             ntoken_pairs = len(token_pair_map.token_pair_corpus_info)
             if ntoken_pairs == 0:
-                print("Encoding over: No token pairs to process")
+                # Encoding over: No token pairs to process
                 break
             selected_token_pair = min(
                 token_pair_map.token_pair_corpus_info.keys(),
                 key=_safe_token_pair_ranker,
             )
             if selected_token_pair not in self.token_pair_merge_ranking:
-                print("Encoding over: No more merges possible")
+                # Encoding over: No more merges possible
                 break
             # Find corresponding new token from vocab and update token_pair_map and
             new_token_b = b"".join(map(self.vocab.get, selected_token_pair))
@@ -248,6 +248,8 @@ class BpePretrainedTokenizer:
         This is required for memory-eﬀicient tokenization of large files that we cannot directly load into memory.
         """
         token_buffer: List[int] = []
+        cnt = 0
+        update_log_freq = 10000
         while True:
             if token_buffer:
                 yield token_buffer.pop(0)  # Remove and return in order of insertion
@@ -256,8 +258,11 @@ class BpePretrainedTokenizer:
                     line = next(
                         iterable
                     )  # If iterable is a file in 'r' mode, this returns a line
+                    cnt+=1
+                    if cnt % update_log_freq == 0:
+                        print(f"Processed {cnt: .4e} lines.")
                 except StopIteration:
-                    print("Iterator has ended.")
+                    print("Encoding over.")
                     break
                 token_buffer += self.encode(line)
                 yield token_buffer.pop(0)
@@ -267,40 +272,61 @@ class BpePretrainedTokenizer:
         utf8_str = b"".join([self.vocab[token] for token in ids])
         return utf8_str.decode("utf-8", errors="replace")
 
-
+import timeit
+import numpy as np
+from cs336_basics.training import get_batch
 # python -m cs336_basics.bpe_tokenizer.encoder_decoder
 if __name__ == "__main__":
-    # TOKENIZER_PATH = (
-    #     (pathlib.Path(__file__).resolve()).parent.parent.parent
-    #     / "data"
-    #     / "TinyStories-tokenizer"
-    # )
-    # vocab_path = str(TOKENIZER_PATH / "vocab.json")
-    # merge_path = str(TOKENIZER_PATH / "merges.txt")
 
-    # tokenizer = BpePretrainedTokenizer.from_files(
-    #     vocab_path, merge_path, special_tokens=["<|endoftext|>"]
-    # )
-    # text = "This is awesome     yablasdf32"
-    # encoded_tokens = tokenizer.encode(text)
-    # encoded_byte_seq = [tokenizer.vocab[token] for token in encoded_tokens]
-    # print(f"Encoded: '{text}' --> {encoded_tokens} == {encoded_byte_seq}")
-
+    # Create Tokenizer
     TOKENIZER_PATH = (
-        (pathlib.Path(__file__).resolve()).parent.parent.parent / "tests" / "fixtures"
+        (pathlib.Path(__file__).resolve()).parent.parent.parent
+        / "data"
+        / "TinyStories-tokenizer"
     )
-    vocab_path = str(TOKENIZER_PATH / "gpt2_vocab.json")
-    merge_path = str(TOKENIZER_PATH / "gpt2_merges.txt")
-
+    vocab_path = str(TOKENIZER_PATH / "vocab.json")
+    merge_path = str(TOKENIZER_PATH / "merges.txt")
     tokenizer = BpePretrainedTokenizer.from_files(
         vocab_path, merge_path, special_tokens=["<|endoftext|>"]
     )
-    test_string = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
-    encoded_ids = tokenizer.encode(test_string)
-    # breakpoint()
-    tokenized_string = [tokenizer.decode([x]) for x in encoded_ids]
-    breakpoint()
-    # Ensure the special <|endoftext|> token is preserved
-    assert tokenized_string.count("<|endoftext|>") == 3
 
-    decoded_string = tokenizer.decode(encoded_ids)
+    # Encode a file using Tokenizer. Save serialized uint16 numpy array of tokens
+    
+    # DATA_DIR = (pathlib.Path(__file__).resolve()).parent.parent.parent/ "tests" / "fixtures"
+    # DATA_FILE = DATA_DIR / "tinystories_sample_5M.txt"
+    DATA_DIR = (pathlib.Path(__file__).resolve()).parent.parent.parent/ "data"
+    DATA_FILE = DATA_DIR / "TinyStoriesV2-GPT4-train.txt"
+    
+    TOKENIZED_FILE = DATA_DIR / (DATA_FILE.stem + "_tokens.npy")
+    all_ids: List[int] = []
+    start_t = timeit.default_timer()
+    
+    if not TOKENIZED_FILE.exists():
+        with open(DATA_FILE) as f:        
+            for _id in tokenizer.encode_iterable(f):
+                all_ids.append(_id)
+        file_size = DATA_FILE.stat().st_size
+        end_t = timeit.default_timer()
+        MBps = file_size / (float(end_t - start_t) * 1024.0 * 1024.0)
+
+        # Output efficiency stats
+        print(f"BPE: Bytes per token: {file_size / float(len(all_ids)): .2f}")
+        print(f"Throughput ratio: {MBps: .2f} MB/s")
+        np.save(TOKENIZED_FILE, np.array(all_ids, dtype=np.uint16))
+        tokenized_file_size = TOKENIZED_FILE.stat().st_size
+        print(f"Absolute compression ratio: {file_size / float(tokenized_file_size): .2f}")
+
+
+    ### Tinystories:
+    # Compression-ratio (bytes / tokens) 4.15 --> We can get a byte-compression of 2x if stored as uint16 (each token < 65k)
+    # Throughput-ratio: 1.65 MB/s or 6 GB/hr
+    
+    # Load tokenized data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
+    tokenized_dataset_mmaped = np.load(TOKENIZED_FILE, mmap_mode='r+')
+    assert tokenized_dataset_mmaped.dtype == np.uint16
+    for i in range(10):
+        batch = get_batch(tokenized_dataset_mmaped, batch_size=32, context_length=128, device='cpu')
+        print(batch)
+
+    
+    

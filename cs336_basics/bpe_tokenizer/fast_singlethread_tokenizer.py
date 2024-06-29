@@ -50,14 +50,21 @@ class Utf8PreTokenTokenPairs:
 
     def __init__(self, pretoken_str: str, token_vocab: Dict[bytes, int]):
         self.pretoken_utf8_b = pretoken_str.encode("utf-8")
-        self.token_pairs = {
-            idx: (
-                token_vocab[self.pretoken_utf8_b[idx : idx + 1]],
-                token_vocab[self.pretoken_utf8_b[idx + 1 : idx + 2]],
-            )
-            for idx in range(len(self.pretoken_utf8_b) - 1)
-        }
+        # print(self.pretoken_utf8_b)
+        # TODO: Handle case where bytes in a pretoken are out of vocab ("out-of-distribution" / tokenizer-training process deficiency)
+        #   Thoughts - 1) append to vocab and create tokens for them (so decoding preserves them)
+        #              2) Simply ignore these bytes.
+        #  Currently trying option 2, because after training, we should not be changing the tokenizer state.
+        self.token_pairs = {}
         self.invalid_idx_set = set()
+
+        for idx in range(len(self.pretoken_utf8_b) - 1):
+            this_byte = self.pretoken_utf8_b[idx : idx + 1]
+            next_byte = self.pretoken_utf8_b[idx + 1 : idx + 2]
+            if this_byte not in token_vocab or next_byte not in token_vocab:
+                self.invalid_idx_set.add(idx)
+                continue
+            token_vocab[idx] = (token_vocab[this_byte], token_vocab[next_byte])
 
     def set_invalid(self, loc: int):
         self.invalid_idx_set.add(loc)
@@ -380,76 +387,3 @@ if __name__ == "__main__":
     vocab, merges = train_bpe(test_string, 264)
     print(f"Vocab: {vocab}\n------\n")
     print(f"Merges: {merges}")
-
-
-# NOTE: This is incorrect. A trie is used for max-matching in-order of input. While this may seem intuitive,
-#       this does not preserve the most-frequent tokens first and would result in a longer tokenization
-#       E.g. if "they" is to be tokenized and we have a seq of merges [(t, h), (e, y), (th, e)]
-#
-#
-# # TokenTrie for efficient encoding of an arbitrary byte-string given a token vocabulary after training
-# class ByteTrieNode:
-#     # Ensure that each instance gets a separate dict.
-#     def __init__(self):
-#         # A dict {next-byte: ByteTrieNode}
-#         self.children: dict = {}
-#         self.token: int = None
-
-
-# class TokenTrieEncoderDecoder:
-#     def __init__(self, token_vocab: Dict[int, bytes]):
-#         self._root = ByteTrieNode()
-#         self.valid = False
-#         self.token_vocab = token_vocab
-
-#     def build(self):
-#         for token, byte_string in self.token_vocab.items():
-#             node = self._root
-#             # Keep adding nodes if they don't exist already.
-#             # At end of the loop, node->root should represent the token byte-string
-#             for b in byte_string:
-#                 # TODO: Might be able to use a default-dict
-#                 if b not in node.children:
-#                     node.children[b] = ByteTrieNode()
-#                 node = node.children[b]
-#             node.token = token
-
-#         self.valid = self._validate()
-
-#     def _validate(self):
-#         self._validate_children(self._root)
-
-#     def _validate_children(self, start_node: ByteTrieNode):
-#         """
-#         Due to the nature of the vocabulary, each child-node in the Trie must have
-#         """
-#         for b, child_node in start_node.children.items():
-#             assert child_node.token is not None, (
-#                 "ERROR: " + str(b) + ": Does not have an associated token-id."
-#             )
-#             self._validate_children(child_node)
-
-#     def tokenize(self, input_byte_str: bytes) -> List[int]:
-#         # Convert the immutable byte string to a mutable bytearray
-#         byte_array = bytearray(input_byte_str)
-#         node = self._root
-#         tokenized_str = []
-#         while byte_array:
-#             # Pop the first byte
-#             first_byte = byte_array.pop(0)
-#             if first_byte in node.children:
-#                 node = node.children[first_byte]
-#             else:
-#                 # No more matching possible. Return token associated and process remaining string from root
-#                 assert node.token is not None
-#                 tokenized_str.append(node.token)
-#                 node = self._root
-#         return tokenized_str
-
-#     def encode(self, text: str):
-#         """
-#         Given a mapping of int --> byte-strings,
-#         Uses a Trie for efficient lookups of incoming byte-strings to greedily .
-#         """
-#         assert self.valid, "Error: Trie is invalid."
-#         return self.tokenize(text.encode("utf-8"))
