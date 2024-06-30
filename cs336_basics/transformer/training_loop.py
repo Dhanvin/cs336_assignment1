@@ -7,19 +7,24 @@ import pathlib
 import json
 
 from cs336_basics.transformer.transformer_lm import TransformerModel
-from cs336_basics.transformer.training import cross_entropy_loss, AdamW, lr_cosine_scheduling, gradient_clipping
+from cs336_basics.transformer.training import (
+    cross_entropy_loss,
+    AdamW,
+    lr_cosine_scheduling,
+    gradient_clipping,
+)
 from cs336_basics.transformer.training import save_checkpoint, load_checkpoint
 from cs336_basics.transformer.training import get_batch
 
-# TODO(slinky): 
+# TODO(slinky):
 #   - How should we initilize weights for training, especially for the Position embedding layer and token encoding layer
-#   - model.vocab_size should be derived from tokenizer? What is the relation between model vocabulary size and tokenizer vocabulary size? 
+#   - model.vocab_size should be derived from tokenizer? What is the relation between model vocabulary size and tokenizer vocabulary size?
 #       - Currently, I ensure that I post-process the vocab with special tokens and merge-list  after traning and here, I just load
 
 # TODO(dhanvin):
-#   - Move the vocab <> merges reconciliation logic that's currently in the encoder directly into the tokenization trainer (huggingface). 
-#       - This will ensure that the saved vocab 
-#   
+#   - Move the vocab <> merges reconciliation logic that's currently in the encoder directly into the tokenization trainer (huggingface).
+#       - This will ensure that the saved vocab
+#
 
 
 def get_device():
@@ -33,14 +38,14 @@ def get_device():
 def train(args, experiment_name: str):
     wandb.init(project=f"cs336-train-{experiment_name}")
 
-    # TODO: Get |vocab_size| from tokenizer. 
+    # TODO: Get |vocab_size| from tokenizer.
     dataset_path = pathlib.Path(args.dataset_dir)
-    vocab_filepath = str(dataset_path/'vocab.json')
+    vocab_filepath = str(dataset_path / "vocab.json")
     # Construct vocab dict. from JSON file with format {unicode-coded string: int, }
     with open(vocab_filepath, "r") as file:
         json_vocab_dict = json.load(file)
     vocab_size = len(json_vocab_dict)
-    
+
     model = TransformerModel(
         vocab_size,
         args.context_length,
@@ -60,11 +65,9 @@ def train(args, experiment_name: str):
         eps=1e-8,
     )
 
-
     # Load tokenized data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
-    training_dataset_mmaped = np.load(args.training_dataset, mmap_mode='r+')
+    training_dataset_mmaped = np.load(args.training_dataset, mmap_mode="r+")
     assert training_dataset_mmaped.dtype == np.uint16
-
 
     ntokens_per_epoch = len(training_dataset_mmaped)
     ntokens_per_iter = float(args.batch_size) * float(args.context_length)
@@ -78,7 +81,7 @@ def train(args, experiment_name: str):
 
     # Set to 5 epochs (don't know why)
     cosine_cycle_iters = iters_per_epochs * 5
-    
+
     # Load checkpoint if exists
     start_iter = 0
     if os.path.exists(args.checkpoint_path):
@@ -90,7 +93,9 @@ def train(args, experiment_name: str):
     # Start training
     for niter in range(start_iter, max_num_iters):
         # Get data
-        x, y = get_batch(training_dataset_mmaped, args.batch_size, args.context_length, device='cpu')
+        x, y = get_batch(
+            training_dataset_mmaped, args.batch_size, args.context_length, device="cpu"
+        )
 
         # Forward (compute loss)
         pred_y = model(x)
@@ -127,6 +132,7 @@ def train(args, experiment_name: str):
 
         if niter % checkpoint_freq == 0:
             save_checkpoint(model, optimizer, niter, args.checkpoint_path)
+
 
 def create_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -213,7 +219,10 @@ def create_arg_parser() -> argparse.ArgumentParser:
     # Info for training
     trainer_cli.add_argument("name", help="Name given to training run.")
     trainer_cli.add_argument("checkpoint_path", help="Path to checkpoint.")
-    trainer_cli.add_argument("dataset_dir", help="Directory to dataset. Assumes that we have the following files inside this dir: <dir>-train.txt, merges.txt, vocab.json, <dir>-valid.txt, <dir>-train-tokens.npy, <dir>-valid-tokens.npy.")
+    trainer_cli.add_argument(
+        "dataset_dir",
+        help="Directory to dataset. Assumes that we have the following files inside this dir: <dir>-train.txt, merges.txt, vocab.json, <dir>-valid.txt, <dir>-train-tokens.npy, <dir>-valid-tokens.npy.",
+    )
     trainer_cli.add_argument("batch_size", nargs="?", default=4, help="")
     trainer_cli.add_argument(
         "total_train_tokens",
@@ -233,7 +242,7 @@ def main():
     Parses CLI args and calls train()
     """
     args = create_arg_parser().parse_args()
-    train(args, 'test')
+    train(args, "test")
 
 
 if __name__ == "__main__":

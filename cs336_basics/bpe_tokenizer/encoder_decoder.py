@@ -48,7 +48,6 @@ def prioritized_regex_matching(
 
     # Sort matches first by priority (lowest number = highest priority), then by start position
     prioritized_matches = sorted(all_matches, key=lambda x: (x[3], x[0]))
-    print(f"Prioritized matches:\n {prioritized_matches}")
 
     unique_matches: List[Tuple] = []
     covered_positions = set()
@@ -60,16 +59,14 @@ def prioritized_regex_matching(
         # Add to result
         unique_matches.append((start, matched_text))
         covered_positions.update(range(start, end))
-    
-    # Sometimes, there may be gaps due to merging of a whitespace with rare_char_str. 
+
+    # Sometimes, there may be gaps due to merging of a whitespace with rare_char_str.
+    # In this case, we create new pre-tokens from the input string
     # TODO(slinky): Is there a better way?
     all_positions = set(range(len(input_text)))
-    gaps = all_positions - covered_positions
-    print(f"Covered positions: {covered_positions}. Gaps: {all_positions - covered_positions}")
-    for gap in gaps:
+    pretokenization_gaps = all_positions - covered_positions
+    for gap in pretokenization_gaps:
         unique_matches.append((gap, input_text[gap]))
-
-
 
     # Sort by start position
     ordered_matches = sorted(unique_matches, key=lambda x: x[0])
@@ -99,10 +96,10 @@ class BpePretrainedTokenizer:
             for rank, bytes_pair in enumerate(self.ordered_merges)
         }
 
-        # Create a prioritized list of compiled regular expressions to ensure that we are first matching for 
+        # Create a prioritized list of compiled regular expressions to ensure that we are first matching for
         # special characters.
         self.pretoken_regex = re.compile(PRETOKEN_PATTERN)
-        # Sort special-tokens by length in descending order. 
+        # Sort special-tokens by length in descending order.
         sorted_special_tokens = (
             sorted(special_tokens, key=len, reverse=True)
             if special_tokens is not None
@@ -159,7 +156,6 @@ class BpePretrainedTokenizer:
                     (merge_strings[0].encode("utf-8"), merge_strings[1].encode("utf-8"))
                 )
 
-        print(f"Registering special tokens to vocab for encoding: {special_tokens}")
         return cls(vocab_utf8, merges, special_tokens)
 
     # Encode an input text into a sequence of token IDs.
@@ -174,7 +170,6 @@ class BpePretrainedTokenizer:
         #    if the entire pre-token is in the vocab
         # pretokens = self.pretoken_regex.findall(text)
         pretokens = prioritized_regex_matching(text, self.regex_list)
-        print(f"Pretokens generated: {pretokens}")
 
         # Store indices where this edge-case applies; we will not use merge-list algorithm here.
         singular_pretoken_ids = set()
@@ -185,9 +180,6 @@ class BpePretrainedTokenizer:
                 tokenized_pretokens[pretoken_idx] = [
                     self.vocab_bytes_to_int[pretoken_utf8_seq]
                 ]
-        
-        # breakpoint()
-        print(f"Singular pretoken-ids: {singular_pretoken_ids}")
 
         # For efficiency, maintain a searchable ordering
         token_pair_map = TokenPairCorpusMap(
@@ -261,7 +253,7 @@ class BpePretrainedTokenizer:
                     line = next(
                         iterable
                     )  # If iterable is a file in 'r' mode, this returns a line
-                    cnt+=1
+                    cnt += 1
                     if cnt % update_log_freq == 0:
                         print(f"Processed {cnt: .3e} lines.")
                 except StopIteration:
@@ -276,15 +268,16 @@ class BpePretrainedTokenizer:
         return utf8_str.decode("utf-8", errors="replace")
 
 
-
 import timeit
 import numpy as np
 from cs336_basics.transformer.training import get_batch
+
 # python -m cs336_basics.bpe_tokenizer.encoder_decoder
 if __name__ == "__main__":
     dataset_name = "TinyStoriesV2-GPT4"
-    DATASET_DIR = (pathlib.Path(__file__).resolve()).parent.parent.parent / "data" / dataset_name
-
+    DATASET_DIR = (
+        (pathlib.Path(__file__).resolve()).parent.parent.parent / "data" / dataset_name
+    )
 
     # Create Tokenizer. We should ensure that this has the same set of special characters as during training.
     vocab_path = str(DATASET_DIR / "vocab.json")
@@ -294,7 +287,9 @@ if __name__ == "__main__":
     )
 
     # >> Setup for testing is slightly different since vocab / merges files may live elsewhere
-    DATASET_DIR = (pathlib.Path(__file__).resolve()).parent.parent.parent/ "tests" / "fixtures" 
+    DATASET_DIR = (
+        (pathlib.Path(__file__).resolve()).parent.parent.parent / "tests" / "fixtures"
+    )
     DATA_FILE = DATASET_DIR / "tinystories_sample_5M.txt"
     TOKENIZED_FILE = DATASET_DIR / (DATA_FILE.stem + "-tokens.npy")
 
@@ -303,9 +298,9 @@ if __name__ == "__main__":
     # TOKENIZED_FILE = dataset_path / (DATA_FILE.stem + "-tokens.npy")
     all_ids: List[int] = []
     start_t = timeit.default_timer()
-    
+
     if not TOKENIZED_FILE.exists():
-        with open(DATA_FILE) as f:        
+        with open(DATA_FILE) as f:
             for _id in tokenizer.encode_iterable(f):
                 all_ids.append(_id)
         file_size = DATA_FILE.stat().st_size
@@ -317,19 +312,19 @@ if __name__ == "__main__":
         print(f"Throughput ratio: {MBps: .2f} MB/s")
         np.save(TOKENIZED_FILE, np.array(all_ids, dtype=np.uint16))
         tokenized_file_size = TOKENIZED_FILE.stat().st_size
-        print(f"Absolute compression ratio: {file_size / float(tokenized_file_size): .2f}")
-
+        print(
+            f"Absolute compression ratio: {file_size / float(tokenized_file_size): .2f}"
+        )
 
     ### Tinystories:
     # Compression-ratio (bytes / tokens) 4.15 --> We can get a byte-compression of 2x if stored as uint16 (each token < 65k)
     # Throughput-ratio: 1.65 MB/s or 6 GB/hr
-    
+
     # Load tokenized data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
-    tokenized_dataset_mmaped = np.load(TOKENIZED_FILE, mmap_mode='r+')
+    tokenized_dataset_mmaped = np.load(TOKENIZED_FILE, mmap_mode="r+")
     assert tokenized_dataset_mmaped.dtype == np.uint16
     for i in range(10):
-        batch = get_batch(tokenized_dataset_mmaped, batch_size=32, context_length=128, device='cpu')
+        batch = get_batch(
+            tokenized_dataset_mmaped, batch_size=32, context_length=128, device="cpu"
+        )
         print(batch)
-
-    
-    

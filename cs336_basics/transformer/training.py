@@ -165,9 +165,7 @@ def lr_cosine_scheduling(
     frac_it = float(it - warmup_iters) / float(cosine_cycle_iters - warmup_iters)
     cosine_oscillation = min_learning_rate + 0.5 * (
         max_learning_rate - min_learning_rate
-    ) * (
-        1.0 + math.cos(frac_it * math.pi)
-    )  
+    ) * (1.0 + math.cos(frac_it * math.pi))
     return cosine_oscillation
 
 
@@ -214,12 +212,9 @@ np_torch_type_mapping = {
     np.uint8: torch.uint8,
 }
 
-# Unsigned numpy dtypes are not compatible with 
+# Unsigned numpy dtypes are not compatible with
 # Torch. First convert them to an appropriate type
-torch_compatible_dtype_map = {
-    np.uint16: np.int32,
-    np.uint32: np.int64
-}
+torch_compatible_dtype_map = {np.uint16: np.int32, np.uint32: np.int64}
 
 
 def get_batch(
@@ -261,11 +256,15 @@ def get_batch(
     # This is because torch.tensor will share memory with this array and needs
     # write access.
     assert dataset.flags.writeable
-    # Convert uint16 to 
+    # Convert uint16 to
     # Use numpy advanced indexing
     if dataset.dtype.type in torch_compatible_dtype_map:
-        input_batch_np = dataset[batch_input_idx].astype(torch_compatible_dtype_map[dataset.dtype.type])
-        target_batch_np = dataset[batch_target_idx].astype(torch_compatible_dtype_map[dataset.dtype.type])
+        input_batch_np = dataset[batch_input_idx].astype(
+            torch_compatible_dtype_map[dataset.dtype.type]
+        )
+        target_batch_np = dataset[batch_target_idx].astype(
+            torch_compatible_dtype_map[dataset.dtype.type]
+        )
     else:
         input_batch_np = dataset[batch_input_idx]
         target_batch_np = dataset[batch_target_idx]

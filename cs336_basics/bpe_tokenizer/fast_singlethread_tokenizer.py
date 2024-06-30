@@ -58,7 +58,6 @@ class Utf8PreTokenTokenPairs:
         self.token_pairs = {}
         self.invalid_idx_set = set()
 
-        # breakpoint()
         for idx in range(len(self.pretoken_utf8_b) - 1):
             this_byte = self.pretoken_utf8_b[idx : idx + 1]
             next_byte = self.pretoken_utf8_b[idx + 1 : idx + 2]
