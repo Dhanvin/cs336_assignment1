@@ -3,6 +3,8 @@ import argparse
 import torch
 import numpy as np
 import wandb  # For logging losses
+import pathlib
+import json
 
 from cs336_basics.transformer.transformer_lm import TransformerModel
 from cs336_basics.transformer.training import cross_entropy_loss, AdamW, lr_cosine_scheduling, gradient_clipping
@@ -12,11 +14,7 @@ from cs336_basics.transformer.training import get_batch
 # TODO(slinky): 
 #   - How should we initilize weights for training, especially for the Position embedding layer and token encoding layer
 #   - model.vocab_size should be derived from tokenizer? What is the relation between model vocabulary size and tokenizer vocabulary size? 
-#       - Would I need to retrian the tokenizer and regenerate the tokens if I provide a different vocab size? 
-#       - However, in our case, we also provide info during encoding of the input corpus (special characters). Does this mean I should store the vocab size together with the 
-#       - Currently the final vocab is formed after. BpePretrainedTokenizer is created. 
-#           * Maybe I can pickle the file after creation and pass the tokenizer-path as a cmd-line arg for training.
-#           * For convenience, the picked tokenizer file can live in the same directory as the tokenized data-set (related)
+#       - Currently, I ensure that I post-process the vocab with special tokens and merge-list  after traning and here, I just load
 
 # TODO(dhanvin):
 #   - Move the vocab <> merges reconciliation logic that's currently in the encoder directly into the tokenization trainer (huggingface). 
@@ -36,7 +34,13 @@ def train(args, experiment_name: str):
     wandb.init(project=f"cs336-train-{experiment_name}")
 
     # TODO: Get |vocab_size| from tokenizer. 
-    vocab_size,
+    dataset_path = pathlib.Path(args.dataset_dir)
+    vocab_filepath = str(dataset_path/'vocab.json')
+    # Construct vocab dict. from JSON file with format {unicode-coded string: int, }
+    with open(vocab_filepath, "r") as file:
+        json_vocab_dict = json.load(file)
+    vocab_size = len(json_vocab_dict)
+    
     model = TransformerModel(
         vocab_size,
         args.context_length,
@@ -209,8 +213,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
     # Info for training
     trainer_cli.add_argument("name", help="Name given to training run.")
     trainer_cli.add_argument("checkpoint_path", help="Path to checkpoint.")
-    trainer_cli.add_argument("training_dataset", help="Path to tokenized training data.")
-    trainer_cli.add_argument("validation_dataset", help="Path to tokenized validation data.")
+    trainer_cli.add_argument("dataset_dir", help="Directory to dataset. Assumes that we have the following files inside this dir: <dir>-train.txt, merges.txt, vocab.json, <dir>-valid.txt, <dir>-train-tokens.npy, <dir>-valid-tokens.npy.")
     trainer_cli.add_argument("batch_size", nargs="?", default=4, help="")
     trainer_cli.add_argument(
         "total_train_tokens",

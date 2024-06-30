@@ -58,13 +58,14 @@ class Utf8PreTokenTokenPairs:
         self.token_pairs = {}
         self.invalid_idx_set = set()
 
+        # breakpoint()
         for idx in range(len(self.pretoken_utf8_b) - 1):
             this_byte = self.pretoken_utf8_b[idx : idx + 1]
             next_byte = self.pretoken_utf8_b[idx + 1 : idx + 2]
             if this_byte not in token_vocab or next_byte not in token_vocab:
                 self.invalid_idx_set.add(idx)
                 continue
-            token_vocab[idx] = (token_vocab[this_byte], token_vocab[next_byte])
+            self.token_pairs[idx] = (token_vocab[this_byte], token_vocab[next_byte])
 
     def set_invalid(self, loc: int):
         self.invalid_idx_set.add(loc)
@@ -246,6 +247,7 @@ class TokenPairCorpusMap:
 
 
 # We store Token and counts in a custom heap to control efficiency during modificaitons
+## TODO (not urgent) --> Broken since we are using huggingface for training
 class MyBPETokenizer:
     # Use if True, uses heap to find max-freq token-pair
     # if False, computes maximal element in token_pair_corpus_map directly

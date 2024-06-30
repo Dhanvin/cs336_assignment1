@@ -41,12 +41,14 @@ def prioritized_regex_matching(
         mutating_text_list = list(mutating_text)
         # Replace the characters at all the specified indices with spaces
         # TODO(@dmehta) -- BUG: Consider using another character that is not a space.
+        rare_char_str = "𓀀"
         for i in all_indices:
-            mutating_text_list[i] = "\x00"
+            mutating_text_list[i] = rare_char_str
         mutating_text = "".join(mutating_text_list)
 
     # Sort matches first by priority (lowest number = highest priority), then by start position
     prioritized_matches = sorted(all_matches, key=lambda x: (x[3], x[0]))
+    print(f"Prioritized matches:\n {prioritized_matches}")
 
     unique_matches: List[Tuple] = []
     covered_positions = set()
@@ -58,6 +60,16 @@ def prioritized_regex_matching(
         # Add to result
         unique_matches.append((start, matched_text))
         covered_positions.update(range(start, end))
+    
+    # Sometimes, there may be gaps due to merging of a whitespace with rare_char_str. 
+    # TODO(slinky): Is there a better way?
+    all_positions = set(range(len(input_text)))
+    gaps = all_positions - covered_positions
+    print(f"Covered positions: {covered_positions}. Gaps: {all_positions - covered_positions}")
+    for gap in gaps:
+        unique_matches.append((gap, input_text[gap]))
+
+
 
     # Sort by start position
     ordered_matches = sorted(unique_matches, key=lambda x: x[0])
@@ -74,20 +86,7 @@ class BpePretrainedTokenizer:
     ):
         self.ordered_merges = merges
         self.vocab = vocab
-        # Sort keywords by length in descending order. This will prioritize merges peroperly in |pattern_match_with_special_keywords()|
-        self.sorted_special_tokens = (
-            sorted(special_tokens, key=len, reverse=True)
-            if special_tokens is not None
-            else None
-        )
 
-        # If a pretoken is in the vocab, we directly tokenize it and don't take it to the merging process
-        if special_tokens:
-            for sp in special_tokens:
-                sp_b = sp.encode("utf-8")
-                self.vocab[len(self.vocab)] = sp_b
-
-        # breakpoint()
         # For efficiency while encoding,
         # 1) maintain an inverted map to find the token for specific token pairs.
         # 2) maintain an inverted list from byte-pair representing a potential merge --> merge-order
@@ -100,11 +99,18 @@ class BpePretrainedTokenizer:
             for rank, bytes_pair in enumerate(self.ordered_merges)
         }
 
+        # Create a prioritized list of compiled regular expressions to ensure that we are first matching for 
+        # special characters.
         self.pretoken_regex = re.compile(PRETOKEN_PATTERN)
-        # Prioritized list of compiled regular expressions
-        if self.sorted_special_tokens:
+        # Sort special-tokens by length in descending order. 
+        sorted_special_tokens = (
+            sorted(special_tokens, key=len, reverse=True)
+            if special_tokens is not None
+            else None
+        )
+        if sorted_special_tokens:
             self.regex_list = [
-                re.compile(rf"{re.escape(word)}") for word in self.sorted_special_tokens
+                re.compile(rf"{re.escape(word)}") for word in sorted_special_tokens
             ]
             self.regex_list += [re.compile(PRETOKEN_PATTERN)]  # Lowest priority
         else:
@@ -141,16 +147,9 @@ class BpePretrainedTokenizer:
                     merge_strings[0] not in json_vocab_dict
                     or merge_strings[1] not in json_vocab_dict
                 ):
-                    # NOTE: If the line is a sequence of white-spaces, we lose information so we cannot use
-                    # the merge-pair ordering during encoding. Instead, we collect these special strings and
-                    # pass it to Utf8PreTokenTokenPairs during initial tokenization of the pretoken prior to
-                    # kicking off the encoding algorithm
-                    if merge_strings[1] == "" and merge_strings[0] not in json_vocab_dict:
-                        special_tokens.append(merge_strings[0])
-                    else:
-                        print(
-                            f"WARNING: Skipping Line #{lcount}: {line} -- {merge_strings} not in Vocab"
-                        )
+                    print(
+                        f"WARNING: Skipping Line #{lcount}: {line} -- {merge_strings} not in Vocab"
+                    )
                     continue
 
                 assert (
@@ -175,7 +174,7 @@ class BpePretrainedTokenizer:
         #    if the entire pre-token is in the vocab
         # pretokens = self.pretoken_regex.findall(text)
         pretokens = prioritized_regex_matching(text, self.regex_list)
-        # print(f"Pretokens generated: {pretokens}")
+        print(f"Pretokens generated: {pretokens}")
 
         # Store indices where this edge-case applies; we will not use merge-list algorithm here.
         singular_pretoken_ids = set()
@@ -186,6 +185,9 @@ class BpePretrainedTokenizer:
                 tokenized_pretokens[pretoken_idx] = [
                     self.vocab_bytes_to_int[pretoken_utf8_seq]
                 ]
+        
+        # breakpoint()
+        print(f"Singular pretoken-ids: {singular_pretoken_ids}")
 
         # For efficiency, maintain a searchable ordering
         token_pair_map = TokenPairCorpusMap(
@@ -261,7 +263,7 @@ class BpePretrainedTokenizer:
                     )  # If iterable is a file in 'r' mode, this returns a line
                     cnt+=1
                     if cnt % update_log_freq == 0:
-                        print(f"Processed {cnt: .4e} lines.")
+                        print(f"Processed {cnt: .3e} lines.")
                 except StopIteration:
                     print("Encoding over.")
                     break
@@ -273,32 +275,32 @@ class BpePretrainedTokenizer:
         utf8_str = b"".join([self.vocab[token] for token in ids])
         return utf8_str.decode("utf-8", errors="replace")
 
+
+
 import timeit
 import numpy as np
 from cs336_basics.transformer.training import get_batch
 # python -m cs336_basics.bpe_tokenizer.encoder_decoder
 if __name__ == "__main__":
+    dataset_name = "TinyStoriesV2-GPT4"
+    DATASET_DIR = (pathlib.Path(__file__).resolve()).parent.parent.parent / "data" / dataset_name
 
-    # Create Tokenizer
-    TOKENIZER_PATH = (
-        (pathlib.Path(__file__).resolve()).parent.parent.parent
-        / "data"
-        / "TinyStories-tokenizer"
-    )
-    vocab_path = str(TOKENIZER_PATH / "vocab.json")
-    merge_path = str(TOKENIZER_PATH / "merges.txt")
+
+    # Create Tokenizer. We should ensure that this has the same set of special characters as during training.
+    vocab_path = str(DATASET_DIR / "vocab.json")
+    merge_path = str(DATASET_DIR / "merges.txt")
     tokenizer = BpePretrainedTokenizer.from_files(
         vocab_path, merge_path, special_tokens=["<|endoftext|>"]
     )
 
+    # >> Setup for testing is slightly different since vocab / merges files may live elsewhere
+    DATASET_DIR = (pathlib.Path(__file__).resolve()).parent.parent.parent/ "tests" / "fixtures" 
+    DATA_FILE = DATASET_DIR / "tinystories_sample_5M.txt"
+    TOKENIZED_FILE = DATASET_DIR / (DATA_FILE.stem + "-tokens.npy")
+
     # Encode a file using Tokenizer. Save serialized uint16 numpy array of tokens
-    
-    # DATA_DIR = (pathlib.Path(__file__).resolve()).parent.parent.parent/ "tests" / "fixtures"
-    # DATA_FILE = DATA_DIR / "tinystories_sample_5M.txt"
-    DATA_DIR = (pathlib.Path(__file__).resolve()).parent.parent.parent/ "data"
-    DATA_FILE = DATA_DIR / "TinyStoriesV2-GPT4-train.txt"
-    
-    TOKENIZED_FILE = DATA_DIR / (DATA_FILE.stem + "_tokens.npy")
+    # DATA_FILE = dataset_path / "TinyStoriesV2-GPT4-train.txt"
+    # TOKENIZED_FILE = dataset_path / (DATA_FILE.stem + "-tokens.npy")
     all_ids: List[int] = []
     start_t = timeit.default_timer()
     
