@@ -388,7 +388,7 @@ def run_gelu(in_features: torch.FloatTensor) -> torch.FloatTensor:
     """
     return gelu_activation(in_features)
 
-from cs336_basics.transformer.training import get_batch
+from cs336_basics.transformer.training import get_batch, SamplingStrategy
 import numpy as np
 def run_get_batch(
     dataset: npt.NDArray, batch_size: int, context_length: int, device: str
@@ -415,7 +415,10 @@ def run_get_batch(
         language modeling labels.
     """
     # Set constant seed to make results predictable
-    return get_batch(dataset, batch_size, context_length, device)
+    out = get_batch(dataset, batch_size, context_length, device)
+    # out_non_overlap = get_batch(dataset, batch_size, context_length, device, SamplingStrategy.SEQ_NON_OVERLAPPING)
+    # breakpoint()
+    return out
 
 from cs336_basics.transformer.transformer_lm import softmax
 def run_softmax(in_features: torch.FloatTensor, dim: int) -> torch.FloatTensor:

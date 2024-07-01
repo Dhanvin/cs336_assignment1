@@ -5,6 +5,7 @@ import numpy as np
 import wandb  # For logging losses
 import pathlib
 import json
+from typing import List, Tuple
 
 from cs336_basics.transformer.transformer_lm import TransformerModel
 from cs336_basics.transformer.training import (
@@ -14,13 +15,13 @@ from cs336_basics.transformer.training import (
     gradient_clipping,
 )
 from cs336_basics.transformer.training import save_checkpoint, load_checkpoint
-from cs336_basics.transformer.training import get_batch
+from cs336_basics.transformer.training import get_batch, SamplingStrategy
+
 
 # TODO(slinky):
 #   - How should we initilize weights for training, especially for the Position embedding layer and token encoding layer --> randomly.. these are going to be learned too?
 #   - model.vocab_size should be derived from tokenizer? What is the relation between model vocabulary size and tokenizer vocabulary size?
 #       - Currently, I ensure that I post-process the vocab with special tokens and merge-list  after traning and here, I just load
-
 
 def get_device():
     """Try to use the GPU if possible, otherwise, use CPU."""
@@ -29,14 +30,7 @@ def get_device():
     else:
         return torch.device("cpu")
 
-
-def train(args, experiment_name: str):
-    checkpoint_dir = pathlib.Path(args.checkpoint_path).resolve()
-    wandb.init(project=f"cs336-train-{checkpoint_dir.stem}")
-
-    # Check theckpoint_dir
-    breakpoint()
-
+def get_tokenizer_vocab_size(args):
     # TODO: Get |vocab_size| from tokenizer.
     dataset_path = pathlib.Path(args.dataset_dir)
     vocab_filepath = str(dataset_path / "vocab.json")
@@ -44,18 +38,22 @@ def train(args, experiment_name: str):
     with open(vocab_filepath, "r") as file:
         json_vocab_dict = json.load(file)
     vocab_size = len(json_vocab_dict)
+    return vocab_size
 
+def initialize_model(args) -> TransformerModel:
     model = TransformerModel(
-        vocab_size,
-        args.context_length,
-        args.num_layers,
-        args.d_model,
-        args.num_heads,
-        args.d_model * 4,
-        args.attn_pdrop,
-        args.residual_pdrop,
-    ).to(get_device())
+            get_tokenizer_vocab_size(args),
+            args.context_length,
+            args.num_layers,
+            args.d_model,
+            args.num_heads,
+            args.d_model * 4,
+            args.attn_pdrop,
+            args.residual_pdrop,
+        ).to(get_device())
+    return model
 
+def initialize_optimizer(args, model: TransformerModel) -> AdamW:
     optimizer = AdamW(
         model.parameters(),
         lr=1e-3,
@@ -63,23 +61,15 @@ def train(args, experiment_name: str):
         betas=(args.beta1, args.beta2),
         eps=1e-8,
     )
+    return optimizer
 
-    # Load tokenized data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
-    training_dataset_mmaped = np.load(args.training_dataset, mmap_mode="r+")
-    assert training_dataset_mmaped.dtype == np.uint16
+def train(args, experiment_name: str):
+    checkpoint_dir = pathlib.Path(args.checkpoint_path).resolve()
+    wandb.init(project=f"cs336-train-{checkpoint_dir.stem}")
 
-    ntokens_per_epoch = len(training_dataset_mmaped)
-    ntokens_per_iter = float(args.batch_size) * float(args.context_length)
-    iters_per_epochs = int(ntokens_per_epoch / ntokens_per_iter)
-
-    max_num_iters = float(args.total_train_tokens) / ntokens_per_iter
-    total_epochs = max_num_iters / iters_per_epochs
-    print(
-        f"Training configured for {max_num_iters} iterations with {args.batch_size} batch-size spanning {total_epochs} epochs"
-    )
-
-    # Set to 5 epochs (don't know why)
-    cosine_cycle_iters = iters_per_epochs * 5
+    # Initialize model and optimizer
+    model = initialize_model(args)
+    optimizer = initialize_optimizer(args, model)
 
     # Load checkpoint if exists
     start_iter = 0
@@ -87,40 +77,52 @@ def train(args, experiment_name: str):
         start_iter = load_checkpoint(args.checkpoint_path)
         print(f"Checkpoint loaded. Resuming training from iteration {start_iter}.")
 
+    # Load tokenized training data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
+    training_dataset_mmaped = np.load(args.training_dataset, mmap_mode="r+")
+    assert training_dataset_mmaped.dtype == np.uint16
+    validation_dataset_mmaped = np.load(args.validation_dataset, mmap_mode="r+")
+    assert validation_dataset_mmaped.dtype == np.uint16
+
+    # Compute epochs and iteration info. Set cosine LR scheduling niters
+    ntokens_per_epoch = len(training_dataset_mmaped)
+    ntokens_per_iter = float(args.training_batch_size) * float(args.context_length)
+    iters_per_epochs = int(ntokens_per_epoch / ntokens_per_iter)
+    cosine_cycle_iters = iters_per_epochs * args.lr_cosine_nepochs
+    max_num_iters = float(args.total_train_tokens) / ntokens_per_iter
+    total_epochs = max_num_iters / iters_per_epochs
+    print(
+        f"Training configured for {max_num_iters} iterations with {args.training_batch_size} batch-size spanning {total_epochs} epochs"
+    )
+
+    # Start training, checkpointing along the way
     checkpoint_freq = 1000  # iters
-
-    # Start training
+    validation_loss_freq = 100  # iters
     for niter in range(start_iter, max_num_iters):
-        # Get data
-        x, y = get_batch(
-            training_dataset_mmaped, args.batch_size, args.context_length, device="cpu"
+        # Get training batch
+        input_tensor, target_tensor = get_batch(
+            training_dataset_mmaped, args.training_batch_size, args.context_length, device=get_device(),
+            strategy=SamplingStrategy.RANDOM
         )
-
-        # Forward (compute loss)
-        pred_logits = model(x)
-        # Output is (batch size, sequence_length, vocab_size)
-        # Targets have dim (batch size, sequence_length).
-        # We treat each element as an independent prediction.
-        loss = cross_entropy_loss(pred_logits, y)
-        wandb.log({"loss": loss.item()})
-
-        # Backward (compute gradients)
-        loss.backward()
-
-        # Update parameters
-        gradient_clipping(model.parameters(), args.max_gradient_norm)
-
-        # Update learning rate and check that it reflects in
+        # Update learning rate for the optimizer.
         for param_group, lr in zip(
             optimizer.param_groups,
             lr_cosine_scheduling(
-                niter, args.lr_max, args.lr_min, args.warmup_iters, cosine_cycle_iters
+                niter, args.lr_max, args.lr_min, args.lr_warmup_iters, cosine_cycle_iters
             ),
         ):
             param_group["lr"] = lr
-
+        
+        # Sanity check (DEBUG only)
         current_lr = optimizer.param_groups[0]["lr"]
         print(f"Iter {niter}, Learning Rate: {current_lr}")
+
+        # Forward (compute loss)
+        pred_logits = model(input_tensor)
+        train_loss = cross_entropy_loss(pred_logits, target_tensor)
+        
+        # Backward (compute gradients)
+        train_loss.backward()
+        gradient_clipping(model.parameters(), args.max_gradient_norm)
 
         # Finally update model params based on gradient
         optimizer.step()
@@ -132,8 +134,28 @@ def train(args, experiment_name: str):
         # (e.g., in reinforcement learning or certain optimization techniques) but we don't want it here.
         optimizer.zero_grad(set_to_none=True)
 
+        # wandb.log({"loss": loss.item()})
+        # Log losses to Weights & Biases
+        if niter % validation_loss_freq == 0:
+            # Disable aspects of the model that are train-only (e.g. dropout)
+            model.eval()
+            # Get validation data
+            val_input_tensor, val_target_tensor = get_batch(
+                validation_dataset_mmaped, args.validation_loss_batch_size, args.context_length, device=get_device(),
+                strategy=SamplingStrategy.SEQ_NON_OVERLAPPING
+            )
+            val_pred_logits = model(val_input_tensor)
+            val_loss = cross_entropy_loss(val_pred_logits, val_target_tensor)
+
+            wandb.log({'iteration': niter, 'train_loss': train_loss, 'val_loss': val_loss})
+            # Reset training-mode for model
+            model.train()
+
+
         if niter % checkpoint_freq == 0:
             save_checkpoint(model, optimizer, niter, args.checkpoint_path)
+    
+    wandb.finish()
 
 
 def create_arg_parser() -> argparse.ArgumentParser:
@@ -164,10 +186,16 @@ def create_arg_parser() -> argparse.ArgumentParser:
         "lr_max", nargs="?", default=1e-2, help="Max learning rate for cosine-scheduler"
     )
     scheduler_cli.add_argument(
-        "warmup_iters",
+        "lr_warmup_iters",
         nargs="?",
         default=50,
         help="Warmup iterations for cosine-scheduler",
+    )
+    scheduler_cli.add_argument(
+        "lr_cosine_nepochs",
+        nargs="?",
+        default=5,
+        help="Number of epochs for cosine pattern",
     )
 
     optimizer_cli.add_argument(
@@ -225,7 +253,8 @@ def create_arg_parser() -> argparse.ArgumentParser:
         "dataset_dir",
         help="Directory to dataset. Assumes that we have the following files inside this dir: <dir>-train.txt, merges.txt, vocab.json, <dir>-valid.txt, <dir>-train-tokens.npy, <dir>-valid-tokens.npy.",
     )
-    trainer_cli.add_argument("batch_size", nargs="?", default=4, help="")
+    trainer_cli.add_argument("training_batch_size", nargs="?", default=4, help="")
+    trainer_cli.add_argument("validation_loss_batch_size", nargs="?", default=1000, help="Number of batches we want to sample for validation")
     trainer_cli.add_argument(
         "total_train_tokens",
         nargs="?",

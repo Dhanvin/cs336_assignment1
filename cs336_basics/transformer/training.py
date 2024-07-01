@@ -7,6 +7,8 @@ import math
 from typing import Optional, IO, BinaryIO
 from collections.abc import Callable, Iterable
 import os
+from enum import Enum
+import random
 
 
 ### Loss Function
@@ -222,12 +224,35 @@ np_torch_type_mapping = {
 # Torch. First convert them to an appropriate type
 torch_compatible_dtype_map = {np.uint16: np.int32, np.uint32: np.int64}
 
+class SamplingStrategy(Enum):
+    RANDOM = 1
+    SEQ_NON_OVERLAPPING = 2
+
+def _sample_start_idx(min_idx: int, max_idx: int, batch_size: int, 
+                    context_length: int, strategy: SamplingStrategy) -> torch.LongTensor:
+    """
+    Draws |batch_size| samples in [min_idx, max_idx) in continuous chunks of |context_length| based on |strategy|
+    Note that max-element in output = max_idx + context_length - 2 (since we are adding two open-intervals)
+    """
+    output_shape = (batch_size, 1)
+    if strategy == SamplingStrategy.RANDOM:
+        return np.random.randint(
+            low=min_idx, high=max_idx, size=output_shape
+        ) + np.arange(context_length)
+    elif strategy == SamplingStrategy.SEQ_NON_OVERLAPPING:
+        # Sample 
+        local_random = random.Random()
+        local_random.seed(42)
+        idx_list = range(min_idx, max_idx, context_length)
+        sampled_with_replacement = local_random.choices(idx_list, k=batch_size)
+        return torch.tensor(sampled_with_replacement, dtype=torch.long).view(output_shape) + np.arange(context_length)
 
 # NOTE:
 # Even though the source data might consist of separate documents (e.g., different web pages, or source code files),
 # a common practice is to concatenate all of those into a single sequence of tokens, adding a delimiter between them (such as the <|endoftext|> token).
 def get_batch(
-    dataset: npt.NDArray, batch_size: int, context_length: int, device: str
+    dataset: npt.NDArray, batch_size: int, context_length: int, device: str,
+    strategy: SamplingStrategy= SamplingStrategy.RANDOM
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Given a dataset (a 1D numpy array of integers) and a desired batch size and
@@ -255,16 +280,21 @@ def get_batch(
         print("dataset is memory-mapped.")
     else:
         print("dataset is not memory-mapped.")
-    valid_start_idx = len(dataset) - context_length
-    # Use broadcasting of + op to create a 2D tensor
-    batch_input_idx = np.random.randint(
-        low=0, high=valid_start_idx, size=(batch_size, 1)
-    ) + np.arange(context_length)
-    batch_target_idx = batch_input_idx + 1
+    
     # NOTE: Read-only numpy arrays won't work with torch.from_numpy.
     # This is because torch.tensor will share memory with this array and needs
     # write access.
     assert dataset.flags.writeable
+
+    # Generate input and target idx for the batch
+    valid_start_idx = len(dataset) - context_length 
+    # Use broadcasting of + op to create a 2D tensor
+    # batch_input_idx = np.random.randint(
+    #     low=0, high=valid_start_idx, size=(batch_size, 1)
+    # ) + np.arange(context_length)
+    batch_input_idx = _sample_start_idx(0, valid_start_idx, batch_size, context_length, strategy)
+    batch_target_idx = batch_input_idx + 1
+
     # Convert uint16 to
     # Use numpy advanced indexing
     if dataset.dtype.type in torch_compatible_dtype_map:

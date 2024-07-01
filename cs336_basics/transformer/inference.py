@@ -4,6 +4,13 @@ import torch
 from typing import Dict, List
 
 
+# Show how nucleus sampling overcomes "repetitiveness" caused by positive feedback loops in greedy strategies (even beam-search),
+# Further, it's much easier for decoder since it doesn't save state during inference and we need to only generate one at a time.
+#
+# title={The Curious Case of Neural Text Degeneration}, 
+# author={Ari Holtzman and Jan Buys and Li Du and Maxwell Forbes and Yejin Choi},
+# year={2020},
+# url={https://arxiv.org/abs/1904.09751}, 
 def nucleus_sampling(probabilities: torch.FloatTensor, p: float):
     """
     Perform nucleus (top-p) sampling on a batch of probability distributions.
