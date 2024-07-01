@@ -31,13 +31,19 @@ def gelu_activation(x: torch.FloatTensor):
     return _approx_gelu(x)
 
 
-def softmax(x: torch.FloatTensor, d_idx: int):
+def softmax(x: torch.FloatTensor, d_idx: int, temp: float = 1.0):
     """
-    Applies the softma
+    Applies the softmax
         - For numeric stability, subtract the largest element in that dimension
+    Return:
+        torch.FloatTensor representing normalized probabilities.
     """
+    assert 1e-3 < temp <= 1.0, "Softmax_temp must be between 1e-3 and 1"
+    # Apply temperature element-wise
+    x = x / temp
+
+    # Compute max and subtract for numeric stability (softmax is invariant to translation).
     max_dim = x.max(dim=d_idx).values
-    # breakpoint()
     exp_offset_x = torch.exp(x - max_dim.unsqueeze(d_idx))
     return exp_offset_x / exp_offset_x.sum(d_idx).unsqueeze(d_idx)
 
@@ -194,6 +200,10 @@ class TransformerModel(nn.Module):
         residual_pdrop: float,
     ):
         super().__init__()
+        # Book-keeping
+        self.context_length = context_length
+
+        # Create transformer layers
         self.layers = nn.ModuleList(
             [
                 TransformerLayer(d_model, num_heads, d_ff, attn_pdrop, residual_pdrop)
@@ -201,12 +211,17 @@ class TransformerModel(nn.Module):
             ]
         )
         # We are only using this to extract nn.Param for conveneint weight-loading but not in matrix multiply
+        # Note that we are using Learned positional and token encoding matrices, which will be updated during training
         self.token_embeddings = nn.Linear(d_model, vocab_size, bias=False)
         self.position_embeddings = nn.Linear(d_model, context_length, bias=False)
         self.ln_final = RmsNorm(d_model)
+
         self.lm_head = nn.Linear(
             d_model, vocab_size, bias=False
         )  # Here, should we keep the bias?
+        # Tie the weights with self.token_embeddings
+        self.lm_head.weight = self.token_embeddings.weight
+
         self.embedding_dropout = nn.Dropout(residual_pdrop)
         self.d_model = d_model
 
@@ -238,6 +253,10 @@ class TransformerModel(nn.Module):
         in_indices: torch.LongTensor
             Tensor with input indices to run the language model on. Shape is (batch_size, sequence_length), where
             `sequence_length` is at most `context_length`.
+
+        Returns:
+            FloatTensor of shape (batch size, sequence_length, vocab_size) with the predicted unnormalized
+            next-word distribution for each token.
         """
         input_embedding = self._get_input_embeddings(in_indices)
         x = self.embedding_dropout(input_embedding)
@@ -245,7 +264,7 @@ class TransformerModel(nn.Module):
             x = transformer_layer(x)
 
         # NOTE: We return the unnormalized probabilities before computing softmax
-        # ? Why are we returning unnormalized? Is it because of X-entropy loss?
+        # for efficient X-entropy loss computation
         return self.lm_head(self.ln_final(x))
 
 
@@ -460,12 +479,12 @@ def adamwAccounting():
         context_length=1024,
         embedding_length=1600,
     )
-    # mylib.flops_accounting(gpt2_xl_conf)
-    # mylib.model_training_memory_load(gpt2_xl_conf, 4)
 
-    nflops = mylib.model_training_flops(
-        gpt2_xl_conf, batch_size=1024, training_steps=400000
-    )
+    # Similar for forward-pass accounting, memory accounting.
+    # flops_accounting(gpt2_xl_conf)
+    # model_training_memory_load(gpt2_xl_conf, 4)
+
+    nflops = model_training_flops(gpt2_xl_conf, batch_size=1024, training_steps=400000)
     ns_per_day = 60.0 * 60.0 * 24.0
     flops_s_per_a100_sp = 19.5e12
     model_utilization = 0.5

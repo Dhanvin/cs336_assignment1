@@ -113,6 +113,11 @@ class BpePretrainedTokenizer:
         else:
             self.regex_list = [re.compile(PRETOKEN_PATTERN)]
 
+        # Assumes that the longest sorted special-token is the end-of-text token.
+        self.end_of_text_token = self.vocab_bytes_to_int[
+            sorted_special_tokens[0].encode("utf-8")
+        ]
+
     # Class method that constructs and return a Tokenizer from a serialized vocabulary and list of merges
     @classmethod
     def from_files(
@@ -260,7 +265,8 @@ class BpePretrainedTokenizer:
                     print("Encoding over.")
                     break
                 token_buffer += self.encode(line)
-                yield token_buffer.pop(0)
+                if token_buffer:
+                    yield token_buffer.pop(0)
 
     # Decode a sequence of token IDs into text.
     def decode(self, ids: List[int]) -> str:
@@ -287,15 +293,15 @@ if __name__ == "__main__":
     )
 
     # >> Setup for testing is slightly different since vocab / merges files may live elsewhere
-    DATASET_DIR = (
-        (pathlib.Path(__file__).resolve()).parent.parent.parent / "tests" / "fixtures"
-    )
-    DATA_FILE = DATASET_DIR / "tinystories_sample_5M.txt"
-    TOKENIZED_FILE = DATASET_DIR / (DATA_FILE.stem + "-tokens.npy")
+    # DATASET_DIR = (
+    #     (pathlib.Path(__file__).resolve()).parent.parent.parent / "tests" / "fixtures"
+    # )
+    # DATA_FILE = DATASET_DIR / "tinystories_sample_5M.txt"
+    # TOKENIZED_FILE = DATASET_DIR / (DATA_FILE.stem + "-tokens.npy")
 
     # Encode a file using Tokenizer. Save serialized uint16 numpy array of tokens
-    # DATA_FILE = dataset_path / "TinyStoriesV2-GPT4-train.txt"
-    # TOKENIZED_FILE = dataset_path / (DATA_FILE.stem + "-tokens.npy")
+    DATA_FILE = DATASET_DIR / "TinyStoriesV2-GPT4-valid.txt"
+    TOKENIZED_FILE = DATASET_DIR / (DATA_FILE.stem + "-tokens.npy")
     all_ids: List[int] = []
     start_t = timeit.default_timer()
 

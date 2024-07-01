@@ -27,8 +27,14 @@ def cross_entropy_loss(inputs: torch.FloatTensor, targets: torch.LongTensor):
 
     NOTE: Perplexity (prob of correct seq) = exp(cross_entropy_loss)
     """
-    assert inputs.dim() == 2, "ERROR: Malformed inputs"
-    assert targets.dim() == 1, "ERROR: Malformed targets"
+    ## Handle any additional batch dimensions and return the average across the batch.
+    assert inputs.dim() - targets.dim() == 1, "ERROR: Malformed inputs"
+    inputs = inputs.reshape(-1, inputs.shape[-1])
+    targets = targets.reshape(
+        -1,
+    )
+    assert inputs.shape[0] == targets.shape[0], "ERROR: Batch size mismatch"
+
     # Take the vector of raw predictions
     # We take log(sum(exp(x - max_i x_i))), taking row-wise max for numeric stability
     max_elem = torch.max(inputs, dim=1)
@@ -217,6 +223,9 @@ np_torch_type_mapping = {
 torch_compatible_dtype_map = {np.uint16: np.int32, np.uint32: np.int64}
 
 
+# NOTE:
+# Even though the source data might consist of separate documents (e.g., different web pages, or source code files),
+# a common practice is to concatenate all of those into a single sequence of tokens, adding a delimiter between them (such as the <|endoftext|> token).
 def get_batch(
     dataset: npt.NDArray, batch_size: int, context_length: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:

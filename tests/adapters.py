@@ -6,8 +6,7 @@ from typing import IO, BinaryIO, Iterable, Optional, Type
 
 import numpy.typing as npt
 import torch
-import cProfile
-import pstats
+
 
 from cs336_basics.transformer.transformer_lm import PositionwiseFeedForward
 def run_positionwise_feedforward(
@@ -49,7 +48,6 @@ def run_positionwise_feedforward(
     my_ffn = PositionwiseFeedForward(d_model, d_ff)
     my_ffn.load_state_dict(weights)
     return my_ffn(in_features)
-    raise NotImplementedError
 
 
 from cs336_basics.transformer.transformer_lm import scaled_dot_product_attention
@@ -93,7 +91,6 @@ def run_scaled_dot_product_attention(
         implementation with the provided key, query, and value tensors.
     """
     return scaled_dot_product_attention(K, Q, V, mask, pdrop)
-    raise NotImplementedError
 
 from cs336_basics.transformer.transformer_lm import CausalMultiheadSelfAttention
 def run_multihead_self_attention(
@@ -146,7 +143,6 @@ def run_multihead_self_attention(
     self_attention_layer = CausalMultiheadSelfAttention(d_model, num_heads, attn_pdrop)
     self_attention_layer.load_state_dict(weights)
     return self_attention_layer.forward(in_features)
-    raise NotImplementedError
 
 from cs336_basics.transformer.transformer_lm import TransformerLayer
 
@@ -241,7 +237,6 @@ def run_transformer_block(
     modify_state_dict_for_multihead_transformer_layer(d_model, num_heads, weights)
     transformer_block.load_state_dict(weights)
     return transformer_block.forward(in_features)
-    raise NotImplementedError
 
 from cs336_basics.transformer.transformer_lm import TransformerModel
 def run_transformer_lm(
@@ -284,8 +279,8 @@ def run_transformer_lm(
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
             The keys of this dictionary are:
-            - `token_embeddings.weight`
-                Token embedding matrix. Shape is (vocab_size, d_model).
+            - `token_embeddings.weight`: NOTE: edited
+                Token embedding matrix. Shape is (d_model, vocab_size).
             - `position_embeddings.weight`
                 Positional embedding matrix. Shape is (context_length, d_model).
             - `layers.{num_layers}.attn.q_proj.weight`
@@ -334,12 +329,15 @@ def run_transformer_lm(
         FloatTensor of shape (batch size, sequence_length, vocab_size) with the predicted unnormalized
         next-word distribution for each token.
     """
+    # Assert that the weights are tied
+    assert torch.equal(weights['lm_head.weight'], weights['token_embeddings.weight'])
+
     transformer_model = TransformerModel(vocab_size, context_length, num_layers, d_model, num_heads, d_ff, attn_pdrop, residual_pdrop)
     for i in range(num_layers):
         modify_state_dict_for_multihead_transformer_layer(d_model, num_heads, weights, f'layers.{i}.')
     transformer_model.load_state_dict(weights)
+
     return transformer_model.forward(in_indices)
-    raise NotImplementedError
 
 
 from cs336_basics.transformer.transformer_lm import RmsNorm, gelu_activation
@@ -374,7 +372,6 @@ def run_rmsnorm(
     rmsnorm = RmsNorm(d_model)
     rmsnorm.load_state_dict(weights)
     return rmsnorm.forward(in_features)
-    # raise NotImplementedError
 
 
 def run_gelu(in_features: torch.FloatTensor) -> torch.FloatTensor:
@@ -419,7 +416,6 @@ def run_get_batch(
     """
     # Set constant seed to make results predictable
     return get_batch(dataset, batch_size, context_length, device)
-    raise NotImplementedError
 
 from cs336_basics.transformer.transformer_lm import softmax
 def run_softmax(in_features: torch.FloatTensor, dim: int) -> torch.FloatTensor:
@@ -437,7 +433,6 @@ def run_softmax(in_features: torch.FloatTensor, dim: int) -> torch.FloatTensor:
         softmax normalizing the specified `dim`.
     """
     return softmax(in_features, dim)
-    raise NotImplementedError
 
 from cs336_basics.transformer.training import cross_entropy_loss
 def run_cross_entropy(inputs: torch.FloatTensor, targets: torch.LongTensor):
@@ -456,7 +451,6 @@ def run_cross_entropy(inputs: torch.FloatTensor, targets: torch.LongTensor):
         Tensor of shape () with the average cross-entropy loss across examples.
     """
     return cross_entropy_loss(inputs, targets)
-    raise NotImplementedError
 
 from cs336_basics.transformer.training import gradient_clipping
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float):
@@ -479,7 +473,6 @@ def get_adamw_cls() -> Type[torch.optim.Optimizer]:
     Returns a torch.optim.Optimizer that implements AdamW.
     """
     return AdamW
-    raise NotImplementedError
 
 
 from cs336_basics.transformer.training import lr_cosine_scheduling
@@ -514,7 +507,6 @@ def run_get_lr_cosine_schedule(
         Learning rate at the given iteration under the specified schedule.
     """
     return lr_cosine_scheduling(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
-    raise NotImplementedError
 
 
 from cs336_basics.transformer.training import save_checkpoint, load_checkpoint
@@ -539,7 +531,6 @@ def run_save_checkpoint(
             Path or file-like object to serialize the model, optimizer, and iteration to.
     """
     save_checkpoint(model, optimizer, iteration, out)
-    # raise NotImplementedError
 
 
 def run_load_checkpoint(
@@ -591,7 +582,6 @@ def get_tokenizer(
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
     return BpePretrainedTokenizer(vocab, merges, special_tokens)
-    raise NotImplementedError
 
 from cs336_basics.bpe_tokenizer.fast_singlethread_tokenizer import train_bpe_from_file
 from cs336_basics.bpe_tokenizer.file_based_multithread_tokenizer import CorpusPretokenizer, BpeTokenizerFileBasedTrainer, PRETOKEN_PATTERN

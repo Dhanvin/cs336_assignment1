@@ -17,14 +17,9 @@ from cs336_basics.transformer.training import save_checkpoint, load_checkpoint
 from cs336_basics.transformer.training import get_batch
 
 # TODO(slinky):
-#   - How should we initilize weights for training, especially for the Position embedding layer and token encoding layer
+#   - How should we initilize weights for training, especially for the Position embedding layer and token encoding layer --> randomly.. these are going to be learned too?
 #   - model.vocab_size should be derived from tokenizer? What is the relation between model vocabulary size and tokenizer vocabulary size?
 #       - Currently, I ensure that I post-process the vocab with special tokens and merge-list  after traning and here, I just load
-
-# TODO(dhanvin):
-#   - Move the vocab <> merges reconciliation logic that's currently in the encoder directly into the tokenization trainer (huggingface).
-#       - This will ensure that the saved vocab
-#
 
 
 def get_device():
@@ -36,7 +31,11 @@ def get_device():
 
 
 def train(args, experiment_name: str):
-    wandb.init(project=f"cs336-train-{experiment_name}")
+    checkpoint_dir = pathlib.Path(args.checkpoint_path).resolve()
+    wandb.init(project=f"cs336-train-{checkpoint_dir.stem}")
+
+    # Check theckpoint_dir
+    breakpoint()
 
     # TODO: Get |vocab_size| from tokenizer.
     dataset_path = pathlib.Path(args.dataset_dir)
@@ -98,8 +97,11 @@ def train(args, experiment_name: str):
         )
 
         # Forward (compute loss)
-        pred_y = model(x)
-        loss = cross_entropy_loss(pred_y, y)
+        pred_logits = model(x)
+        # Output is (batch size, sequence_length, vocab_size)
+        # Targets have dim (batch size, sequence_length).
+        # We treat each element as an independent prediction.
+        loss = cross_entropy_loss(pred_logits, y)
         wandb.log({"loss": loss.item()})
 
         # Backward (compute gradients)
@@ -242,7 +244,7 @@ def main():
     Parses CLI args and calls train()
     """
     args = create_arg_parser().parse_args()
-    train(args, "test")
+    train(args)
 
 
 if __name__ == "__main__":

@@ -47,8 +47,6 @@ def _post_process_vocab(
         for sp in special_tokens:
             json_vocab_dict[sp] = len(json_vocab_dict)
 
-    breakpoint()
-
     # Save dictionary to JSON file
     with open(vocab_filepath, "w") as f:
         json.dump(json_vocab_dict, f)
@@ -96,15 +94,20 @@ def train_tokenizer(
     )
 
 
-# List of files to train on
+# Configure training and post-training phase
 dataset_name = "TinyStoriesV2-GPT4"
 dataset_path = (
     (pathlib.Path(__file__).resolve()).parent.parent.parent / "data" / dataset_name
 )
 training_file = dataset_name + "-train.txt"
+# Free params
 vocab_size = 10000
-# Adjust as needed
-train_tokenizer(dataset_path, [str(dataset_path / training_file)], vocab_size)
+special_tokens = ["<|endoftext|>"]
+train_tokenizer(
+    dataset_path,
+    [str(dataset_path / training_file)],
+    vocab_size,
+)
 
 
 # training_files = [str(file) for file in DATASET_PATH.glob("owt*train.txt")]
