@@ -3,6 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 
 import numpy as np
+import numpy.typing as npt
 import math
 from typing import Optional, IO, BinaryIO
 from collections.abc import Callable, Iterable
@@ -76,6 +77,7 @@ class SGD(torch.optim.Optimizer):
         return loss  # Allows chaining steps.
 
 
+### Optimizer
 class AdamW(torch.optim.Optimizer):
     def __init__(
         self, params, lr: float, weight_decay=0.01, betas=(0.9, 0.999), eps=1e-8
@@ -104,7 +106,7 @@ class AdamW(torch.optim.Optimizer):
             weight_decay = group["weight_decay"]
             betas = group["betas"]
             eps = group["eps"]
-            print(f'# params: {len(group["params"])}')
+            # print(f'# params: {len(group["params"])}')
             for p in group["params"]:
                 if p.grad is None:
                     continue
@@ -177,6 +179,18 @@ def lr_cosine_scheduling(
     return cosine_oscillation
 
 
+def combined_gradient_norm(parameters: Iterable[torch.nn.Parameter]):
+    # Important Note: L2 norm is computed for all params in the input (entire param-group)
+    # Reason: This helps in maintaining the relative magnitudes of the gradients for different parameters,
+    # which is important for the training dynamics.
+    combined_sum_sq = 0.0
+    for p in parameters:
+        if p.grad is None:
+            continue
+        combined_sum_sq += torch.sum(p.grad**2)
+    return math.sqrt(combined_sum_sq)
+
+
 def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float):
     """Given a set of parameters, clip their *combined* gradients to have l2 norm at most max_l2_norm.
 
@@ -192,12 +206,7 @@ def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: flo
     # Important Note: L2 norm is computed for all params in the input (entire param-group)
     # Reason: This helps in maintaining the relative magnitudes of the gradients for different parameters,
     # which is important for the training dynamics.
-    combined_sum_sq = 0.0
-    for p in parameters:
-        if p.grad is None:
-            continue
-        combined_sum_sq += torch.sum(p.grad**2)
-    combined_norm = math.sqrt(combined_sum_sq)
+    combined_norm = combined_gradient_norm(parameters)
 
     if combined_norm > max_l2_norm:
         for p in parameters:
@@ -208,8 +217,6 @@ def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: flo
 
 
 ### Data-Loading
-import numpy.typing as npt
-
 # Create a dictionary to map NumPy dtypes to PyTorch dtypes
 np_torch_type_mapping = {
     np.float32: torch.float32,
@@ -224,12 +231,19 @@ np_torch_type_mapping = {
 # Torch. First convert them to an appropriate type
 torch_compatible_dtype_map = {np.uint16: np.int32, np.uint32: np.int64}
 
+
 class SamplingStrategy(Enum):
     RANDOM = 1
     SEQ_NON_OVERLAPPING = 2
 
-def _sample_start_idx(min_idx: int, max_idx: int, batch_size: int, 
-                    context_length: int, strategy: SamplingStrategy) -> torch.LongTensor:
+
+def _sample_start_idx(
+    min_idx: int,
+    max_idx: int,
+    batch_size: int,
+    context_length: int,
+    strategy: SamplingStrategy,
+) -> torch.LongTensor:
     """
     Draws |batch_size| samples in [min_idx, max_idx) in continuous chunks of |context_length| based on |strategy|
     Note that max-element in output = max_idx + context_length - 2 (since we are adding two open-intervals)
@@ -240,19 +254,25 @@ def _sample_start_idx(min_idx: int, max_idx: int, batch_size: int,
             low=min_idx, high=max_idx, size=output_shape
         ) + np.arange(context_length)
     elif strategy == SamplingStrategy.SEQ_NON_OVERLAPPING:
-        # Sample 
+        # Sample
         local_random = random.Random()
         local_random.seed(42)
         idx_list = range(min_idx, max_idx, context_length)
         sampled_with_replacement = local_random.choices(idx_list, k=batch_size)
-        return torch.tensor(sampled_with_replacement, dtype=torch.long).view(output_shape) + np.arange(context_length)
+        return torch.tensor(sampled_with_replacement, dtype=torch.long).view(
+            output_shape
+        ) + np.arange(context_length)
+
 
 # NOTE:
 # Even though the source data might consist of separate documents (e.g., different web pages, or source code files),
 # a common practice is to concatenate all of those into a single sequence of tokens, adding a delimiter between them (such as the <|endoftext|> token).
 def get_batch(
-    dataset: npt.NDArray, batch_size: int, context_length: int, device: str,
-    strategy: SamplingStrategy= SamplingStrategy.RANDOM
+    dataset: npt.NDArray,
+    batch_size: int,
+    context_length: int,
+    device: str,
+    strategy: SamplingStrategy = SamplingStrategy.RANDOM,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Given a dataset (a 1D numpy array of integers) and a desired batch size and
@@ -276,23 +296,25 @@ def get_batch(
         language modeling labels.
     """
     # Check if dataset is memory-mapped
-    if type(dataset) == np.memmap:
-        print("dataset is memory-mapped.")
-    else:
-        print("dataset is not memory-mapped.")
-    
+    # if type(dataset) == np.memmap:
+    #     print("dataset is memory-mapped.")
+    # else:
+    #     print("dataset is not memory-mapped.")
+
     # NOTE: Read-only numpy arrays won't work with torch.from_numpy.
     # This is because torch.tensor will share memory with this array and needs
     # write access.
     assert dataset.flags.writeable
 
     # Generate input and target idx for the batch
-    valid_start_idx = len(dataset) - context_length 
+    valid_start_idx = len(dataset) - context_length
     # Use broadcasting of + op to create a 2D tensor
     # batch_input_idx = np.random.randint(
     #     low=0, high=valid_start_idx, size=(batch_size, 1)
     # ) + np.arange(context_length)
-    batch_input_idx = _sample_start_idx(0, valid_start_idx, batch_size, context_length, strategy)
+    batch_input_idx = _sample_start_idx(
+        0, valid_start_idx, batch_size, context_length, strategy
+    )
     batch_target_idx = batch_input_idx + 1
 
     # Convert uint16 to

@@ -65,7 +65,7 @@ class Utf8PreTokenTokenPairs:
                 self.invalid_idx_set.add(idx)
                 continue
             self.token_pairs[idx] = (token_vocab[this_byte], token_vocab[next_byte])
-        
+
     def set_invalid(self, loc: int):
         self.invalid_idx_set.add(loc)
 
@@ -257,13 +257,15 @@ class MyBPETokenizer:
 
         # Initialize Token book-keeping (both dict and heap data-structures)
         vocab_bytes_to_int = {v: k for k, v in self.token_vocab.items()}
-        self.token_pair_corpus_map = TokenPairCorpusMap({
-                idx: Utf8PreTokenTokenPairs(
-                    pretoken, vocab_bytes_to_int
+        self.token_pair_corpus_map = TokenPairCorpusMap(
+            {
+                idx: Utf8PreTokenTokenPairs(pretoken, vocab_bytes_to_int)
+                for idx, pretoken in enumerate(
+                    re.findall(PRETOKEN_PATTERN, text_corpus)
                 )
-                for idx, pretoken in enumerate(re.findall(PRETOKEN_PATTERN, text_corpus))
-            })
-        
+            }
+        )
+
         self.token_pair_priority_queue = ModifiablePriorityQueue.heapify(
             [
                 HeapItem(

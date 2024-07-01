@@ -114,9 +114,11 @@ class BpePretrainedTokenizer:
             self.regex_list = [re.compile(PRETOKEN_PATTERN)]
 
         # Assumes that the longest sorted special-token is the end-of-text token.
-        self.end_of_text_token = self.vocab_bytes_to_int[
-            sorted_special_tokens[0].encode("utf-8")
-        ] if sorted_special_tokens is not None else None
+        self.end_of_text_token = (
+            self.vocab_bytes_to_int[sorted_special_tokens[0].encode("utf-8")]
+            if sorted_special_tokens is not None
+            else None
+        )
 
     # Class method that constructs and return a Tokenizer from a serialized vocabulary and list of merges
     @classmethod
