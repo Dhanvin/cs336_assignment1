@@ -65,7 +65,7 @@ class Utf8PreTokenTokenPairs:
                 self.invalid_idx_set.add(idx)
                 continue
             self.token_pairs[idx] = (token_vocab[this_byte], token_vocab[next_byte])
-
+        
     def set_invalid(self, loc: int):
         self.invalid_idx_set.add(loc)
 
@@ -246,7 +246,6 @@ class TokenPairCorpusMap:
 
 
 # We store Token and counts in a custom heap to control efficiency during modificaitons
-## TODO (not urgent) --> Broken since we are using huggingface for training
 class MyBPETokenizer:
     # Use if True, uses heap to find max-freq token-pair
     # if False, computes maximal element in token_pair_corpus_map directly
@@ -256,15 +255,15 @@ class MyBPETokenizer:
         # Initialize special tokens before all others
         self.token_vocab: Dict[int, bytes] = {i: bytes([i]) for i in range(256)}
 
-        # Initilize Utf8PreTokenBytePairs. This is a self-contained representation of the corpus.
-        # NOTE: As the token-vocabulary expands during training, some of these idx will become stale (will be marked invalid)
-        training_corpus: TokenizationCorpus = [
-            Utf8PreTokenTokenPairs(pretoken, self.token_vocab)
-            for idx, pretoken in enumerate(re.findall(PRETOKEN_PATTERN, text_corpus))
-        ]
-
         # Initialize Token book-keeping (both dict and heap data-structures)
-        self.token_pair_corpus_map = TokenPairCorpusMap(training_corpus)
+        vocab_bytes_to_int = {v: k for k, v in self.token_vocab.items()}
+        self.token_pair_corpus_map = TokenPairCorpusMap({
+                idx: Utf8PreTokenTokenPairs(
+                    pretoken, vocab_bytes_to_int
+                )
+                for idx, pretoken in enumerate(re.findall(PRETOKEN_PATTERN, text_corpus))
+            })
+        
         self.token_pair_priority_queue = ModifiablePriorityQueue.heapify(
             [
                 HeapItem(

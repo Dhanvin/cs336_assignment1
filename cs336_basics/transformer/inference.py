@@ -60,6 +60,8 @@ class Decoder:
         self.softmax_temp = softmax_temp
         self.nucleus_sampling_threshold = nucleus_sampling_threshold
 
+        assert self.tokenizer.end_of_text_token is not None
+
     def to_model_input(
         self, prompts: List[str], context_length: int
     ) -> torch.LongTensor:
