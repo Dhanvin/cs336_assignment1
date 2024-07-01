@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterable
 import os
 from enum import Enum
 import random
+from .common import SamplingStrategy, get_device, np_array_to_tensor
 
 
 ### Loss Function
@@ -95,7 +96,6 @@ class AdamW(torch.optim.Optimizer):
             "betas": betas,
             "eps": eps,
         }
-
         super().__init__(params, defaults)
 
     def step(self, closure: Optional[Callable] = None):
@@ -114,8 +114,8 @@ class AdamW(torch.optim.Optimizer):
                 state = self.state[p]
 
                 # Update state based on gradient
-                m = state.get("m", torch.zeros(p.data.shape))
-                v = state.get("v", torch.zeros(p.data.shape))
+                m = state.get("m", torch.zeros(p.data.shape).to(get_device()))
+                v = state.get("v", torch.zeros(p.data.shape).to(get_device()))
                 grad = p.grad.data
                 state["m"] = betas[0] * m + (1 - betas[0]) * grad
                 state["v"] = betas[1] * v + (1 - betas[1]) * (grad**2)
@@ -217,26 +217,6 @@ def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: flo
 
 
 ### Data-Loading
-# Create a dictionary to map NumPy dtypes to PyTorch dtypes
-np_torch_type_mapping = {
-    np.float32: torch.float32,
-    np.float64: torch.float64,
-    np.int16: torch.int16,
-    np.int32: torch.int32,
-    np.int64: torch.int64,
-    np.uint8: torch.uint8,
-}
-
-# Unsigned numpy dtypes are not compatible with
-# Torch. First convert them to an appropriate type
-torch_compatible_dtype_map = {np.uint16: np.int32, np.uint32: np.int64}
-
-
-class SamplingStrategy(Enum):
-    RANDOM = 1
-    SEQ_NON_OVERLAPPING = 2
-
-
 def _sample_start_idx(
     min_idx: int,
     max_idx: int,
@@ -249,6 +229,7 @@ def _sample_start_idx(
     Note that max-element in output = max_idx + context_length - 2 (since we are adding two open-intervals)
     """
     output_shape = (batch_size, 1)
+    # Use broadcasting of + op to create a 2D tensor
     if strategy == SamplingStrategy.RANDOM:
         return np.random.randint(
             low=min_idx, high=max_idx, size=output_shape
@@ -308,32 +289,15 @@ def get_batch(
 
     # Generate input and target idx for the batch
     valid_start_idx = len(dataset) - context_length
-    # Use broadcasting of + op to create a 2D tensor
-    # batch_input_idx = np.random.randint(
-    #     low=0, high=valid_start_idx, size=(batch_size, 1)
-    # ) + np.arange(context_length)
     batch_input_idx = _sample_start_idx(
         0, valid_start_idx, batch_size, context_length, strategy
     )
     batch_target_idx = batch_input_idx + 1
 
-    # Convert uint16 to
-    # Use numpy advanced indexing
-    if dataset.dtype.type in torch_compatible_dtype_map:
-        input_batch_np = dataset[batch_input_idx].astype(
-            torch_compatible_dtype_map[dataset.dtype.type]
-        )
-        target_batch_np = dataset[batch_target_idx].astype(
-            torch_compatible_dtype_map[dataset.dtype.type]
-        )
-    else:
-        input_batch_np = dataset[batch_input_idx]
-        target_batch_np = dataset[batch_target_idx]
-    input_seq = torch.from_numpy(input_batch_np).to(device)
-    assert (
-        input_seq.dtype == np_torch_type_mapping[input_batch_np.dtype.type]
-    )  # Input numpy array is int64 so no explicit conversion is required
-    target_seq = torch.from_numpy(target_batch_np).to(device)
+    # Convert to tensor. Internally, uint16 will be converted to torch.long
+    input_seq = np_array_to_tensor(dataset[batch_input_idx], get_device())
+    target_seq = np_array_to_tensor(dataset[batch_target_idx], get_device())
+
     return (input_seq, target_seq)
 
 

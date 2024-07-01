@@ -16,6 +16,7 @@ from cs336_basics.transformer.training import (
     gradient_clipping,
     combined_gradient_norm,
 )
+from .common import SamplingStrategy, get_device
 from cs336_basics.transformer.training import save_checkpoint, load_checkpoint
 from cs336_basics.transformer.training import get_batch, SamplingStrategy
 
@@ -24,14 +25,6 @@ from cs336_basics.transformer.training import get_batch, SamplingStrategy
 #   - How should we initilize weights for training, especially for the Position embedding layer and token encoding layer --> randomly.. these are going to be learned too?
 #   - model.vocab_size should be derived from tokenizer? What is the relation between model vocabulary size and tokenizer vocabulary size?
 #       - Currently, I ensure that I post-process the vocab with special tokens and merge-list  after traning and here, I just load
-
-
-def get_device():
-    """Try to use the GPU if possible, otherwise, use CPU."""
-    if torch.cuda.is_available():
-        return torch.device("cuda:0")
-    else:
-        return torch.device("cpu")
 
 
 def get_tokenizer_vocab_size(args):
@@ -162,9 +155,6 @@ def train(args):
         )
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr_now
-
-        # Sanity check (DEBUG only)
-        current_lr = optimizer.param_groups[0]["lr"]
 
         # Forward (compute loss)
         pred_logits = model(input_tensor)

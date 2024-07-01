@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import numpy as np
 import math
 from typing import Optional
+from .common import get_device
 
 
 def _approx_gelu(x):
@@ -144,7 +145,9 @@ class CausalMultiheadSelfAttention(nn.Module):
     def forward(self, x: torch.FloatTensor):
         seq_len = x.size(-2)
         last_dim = x.dim() - 1
-        future_token_mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+        future_token_mask = (
+            torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool().to(get_device())
+        )
         scaled_attentions = [
             scaled_dot_product_attention(
                 self.k_heads[head](x),
