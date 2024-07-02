@@ -165,10 +165,10 @@ class CorpusPretokenizer:
                             float(self.buffer_start_offset) * 100 / float(eof_offset)
                         )
                         logger.info(f"** Saving state ***")
-                        self.save()
+                        # self.save()
             logger.info("Corpus Pretokenized!")
             logger.info(f"** Saving state ***")
-            self.save()
+            # self.save()
 
         except FileNotFoundError:
             print(f"The file {self.corpus_filepath} does not exist.")

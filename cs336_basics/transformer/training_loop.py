@@ -16,8 +16,11 @@ from cs336_basics.transformer.training import (
     gradient_clipping,
     combined_gradient_norm,
 )
-from .common import SamplingStrategy, get_device
-from cs336_basics.transformer.training import save_checkpoint, load_checkpoint
+from cs336_basics.transformer.common import SamplingStrategy, get_device
+from cs336_basics.transformer.training import (
+    save_model_checkpoint,
+    load_model_checkpoint,
+)
 from cs336_basics.transformer.training import get_batch, SamplingStrategy
 
 
@@ -41,13 +44,13 @@ def get_tokenizer_vocab_size(args):
 def initialize_model(args) -> TransformerModel:
     model = TransformerModel(
         get_tokenizer_vocab_size(args),
-        args.context_length,
-        args.num_layers,
-        args.d_model,
-        args.num_heads,
-        args.d_model * 4,
-        args.attn_pdrop,
-        args.residual_pdrop,
+        int(args.context_length),
+        int(args.num_layers),
+        int(args.d_model),
+        int(args.num_heads),
+        int(args.d_model) * 4,
+        float(args.attn_pdrop),
+        float(args.residual_pdrop),
     ).to(get_device())
     return model
 
@@ -56,7 +59,7 @@ def initialize_optimizer(args, model: TransformerModel) -> AdamW:
     optimizer = AdamW(
         model.parameters(),
         lr=1e-3,
-        betas=(args.beta_1, args.beta_2),
+        betas=(float(args.beta_1), float(args.beta_2)),
         eps=1e-8,
     )
     return optimizer
@@ -75,15 +78,15 @@ def compute_train_validation_losses(
     # Sample validation and training data with non-overlapping batches
     val_input_tensor, val_target_tensor = get_batch(
         validation_dataset,
-        args.eval_batch_size,
-        args.context_length,
+        int(args.eval_batch_size),
+        int(args.context_length),
         device=get_device(),
         strategy=SamplingStrategy.SEQ_NON_OVERLAPPING,
     )
     train_input_tensor, train_target_tensor = get_batch(
         training_dataset,
-        args.eval_batch_size,
-        args.context_length,
+        int(args.eval_batch_size),
+        int(args.context_length),
         device=get_device(),
         strategy=SamplingStrategy.SEQ_NON_OVERLAPPING,
     )
@@ -112,7 +115,7 @@ def train(args):
     checkpoint_dir = pathlib.Path(args.checkpoint_path)
     checkpoint_file = str(checkpoint_dir / (args.name + "_checkpoint.pt"))
     if os.path.exists(checkpoint_file):
-        start_iter = load_checkpoint(str(checkpoint_file), model, optimizer)
+        start_iter = load_model_checkpoint(str(checkpoint_file), model, optimizer)
         print(f"Checkpoint loaded. Resuming training from iteration {start_iter}.")
 
     # Load tokenized training data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
@@ -137,21 +140,25 @@ def train(args):
     )
 
     # Start training, checkpointing along the way
-    checkpoint_freq = 1000  # iters
+    checkpoint_freq = 100  # iters
     validation_loss_freq = 10  # iters
     for niter in range(start_iter, max_num_iters):
         # Get training batch
         input_tensor, target_tensor = get_batch(
             training_dataset_mmaped,
-            args.training_batch_size,
-            args.context_length,
+            int(args.training_batch_size),
+            int(args.context_length),
             device=get_device(),
             strategy=SamplingStrategy.RANDOM,
         )
 
         # Update learning rate for the optimizer.
         lr_now = lr_cosine_scheduling(
-            niter, args.lr_max, args.lr_min, args.lr_warmup_iters, cosine_cycle_iters
+            niter,
+            float(args.lr_max),
+            float(args.lr_min),
+            int(args.lr_warmup_iters),
+            cosine_cycle_iters,
         )
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr_now
@@ -162,7 +169,7 @@ def train(args):
 
         # Backward (compute gradients)
         train_loss.backward()
-        gradient_clipping(model.parameters(), args.max_gradient_norm)
+        gradient_clipping(model.parameters(), float(args.max_gradient_norm))
 
         # Finally update model params based on gradient
         optimizer.step()
@@ -197,7 +204,7 @@ def train(args):
                 os.makedirs(parent_dir)
                 print(f"Created directories up to {parent_dir}")
             print(f"Saving checkpoint at {checkpoint_file}")
-            save_checkpoint(model, optimizer, niter, str(checkpoint_file))
+            save_model_checkpoint(model, optimizer, niter, str(checkpoint_file))
 
     wandb.finish()
 
@@ -286,11 +293,11 @@ def create_arg_parser() -> argparse.ArgumentParser:
     model_cli.add_argument(
         "--attn_pdrop",
         nargs="?",
-        default=0.0,
+        default=0.2,
         help="Dropout rate for attention-probabilities",
     )
     model_cli.add_argument(
-        "--residual_pdrop", nargs="?", default=0.0, help="Dropout rate for residuals"
+        "--residual_pdrop", nargs="?", default=0.2, help="Dropout rate for residuals"
     )
 
     # Info for training

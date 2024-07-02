@@ -512,7 +512,7 @@ def run_get_lr_cosine_schedule(
     return lr_cosine_scheduling(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
-from cs336_basics.transformer.training import save_checkpoint, load_checkpoint
+from cs336_basics.transformer.training import save_model_checkpoint, load_model_checkpoint
 def run_save_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -533,7 +533,7 @@ def run_save_checkpoint(
         out: str | os.PathLike | BinaryIO | IO[bytes]
             Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    save_checkpoint(model, optimizer, iteration, out)
+    save_model_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -557,7 +557,7 @@ def run_load_checkpoint(
     Returns:
         int, the previously-serialized number of iterations.
     """
-    return load_checkpoint(src, model, optimizer)
+    return load_model_checkpoint(src, model, optimizer)
     raise NotImplementedError
 
 from cs336_basics.bpe_tokenizer.encoder_decoder import BpePretrainedTokenizer

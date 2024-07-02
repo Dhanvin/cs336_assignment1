@@ -304,7 +304,7 @@ def get_batch(
 ### Checkpointing
 # str, os.PathLike: string or bytes object representing a file system path
 # BinaryIO | IO[bytes]: binary file-like object
-def save_checkpoint(
+def save_model_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     iteration: int,
@@ -332,7 +332,7 @@ def save_checkpoint(
     torch.save(obj, out)
 
 
-def load_checkpoint(
+def load_model_checkpoint(
     src: str | os.PathLike | BinaryIO | IO[bytes],
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
