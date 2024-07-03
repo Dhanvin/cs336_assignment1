@@ -329,10 +329,19 @@ def save_model_checkpoint(
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),  # Same as optimizer.state_dict()
         "niter": iteration,
-        'wandb_config': {
-            'project': wandb.run.project,
-            'run_id': wandb.run.id,
-        } if wandb.run is not None else None
+        "wandb_config": (
+            {
+                "project": wandb.run.project,
+                "run_id": wandb.run.id,
+            }
+            if wandb.run is not None
+            else None
+        ),
+        "model_init_config": (
+            model.initialization_config
+            if hasattr(model, "initialization_config")
+            else None
+        ),
     }
     torch.save(obj, out)
 
@@ -360,7 +369,12 @@ def load_model_checkpoint(
     """
     obj = torch.load(src)
     model.load_state_dict(obj["model_state"])
-    optimizer.load_state_dict(obj["optimizer_state"])
-    return {'niters': obj["niter"],
-            'wandb_config': obj['wandb_config']}
-    
+
+    # Inference would also load checkpoints but ignore optimizer state.
+    if optimizer is not None:
+        optimizer.load_state_dict(obj["optimizer_state"])
+    return {
+        "niters": obj["niter"],
+        "wandb_config": obj["wandb_config"],
+        "model_init_config": obj["model_init_config"],
+    }

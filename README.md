@@ -6,6 +6,77 @@ For a full description of the assignment, see the assignment handout at
 If you see any issues with the assignment handout or code, please feel free to
 raise a GitHub issue or open a pull request with a fix.
 
+## Running end-to-end Notes:
+1. BPE Tokenizer Training using Huggingface. Be sure to add <|endoftext|> as special token during training (see [tokenizer-training code](./cs336_basics/bpe_tokenizer/huggingface_bpe_trainer.py)). Ensure we have the right "dataset_name".
+``` sh
+python cs336_basics/bpe_tokenizer/huggingface_bpe_trainer.py
+```
+Check that we have an <|endoftext|> in the vocab.json file that's created.
+
+2. Test encoding with a sample from the training data. Manually inspect the tokens with the vocab.json file. Configure and run:
+``` sh
+python -m cs336_basics.bpe_tokenizer.encoder_decoder
+```
+for *both the training and validation files* by editing the script. Search for the token corresponding to <|endoftext|> in both the tokenized files.
+
+3. Upload the tokenized dir to Google Drive
+
+4. Use Google Colab to train the model (A100 GPU)
+``` sh
+python cs336_basics/transformer/training_loop.py \
+--name='cpu_test_wandb' --dataset_dir='/Users/rajvimehta/Dhanvin-Code/cs336/spring2024-assignment1-basics/data/TinyStoriesV2-GPT4' \
+--checkpoint_path='/tmp/debug_checkpoints/' \
+--training_batch_size=4 \
+--total_train_tokens=327680000 \
+--training_batch_size=32 \
+--eval_batch_size=100 \
+--lr_max=1e-4 \
+--lr_min=1e-5 \
+--lr_warmup_iters=300
+```
+Track performance in wandb. Ensure that validation and training curves are converging.
+
+5. Download the trained model checkpoint
+
+6. Run model inference to generate
+```sh
+python cs336_basics/transformer/inference.py \
+--tokenizer_dir='/Users/rajvimehta/Dhanvin-Code/cs336/spring2024-assignment1-basics/data/TinyStoriesV2-GPT4/' \
+--checkpoint_file '/Users/rajvimehta/Dhanvin-Code/cs336/spring2024-assignment1-basics/model_checkpoints/lr_5x-10-3-slower-ramp_checkpoint.pt'
+```
+
+
+NOTE: If our tokenization is done poorly, we must repeat everything again :/
+
+## TODOs (Dhanvin)
+1. Experiment with training → batch sizes, dropout, a little more on learning rate
+2. Decoder - check runtime, etc.
+3. Experiment with architectural change → parallel
+4. Fast decoder inference: Implement KV cacheing for decoding
+
+## Experiments
+Logs for Training Runs:
+```sh
+https://wandb.ai/dhanvin_personal/cs336-assignment1/workspace?nw=nwuserdhanvinm
+https://colab.research.google.com/drive/15ZoEOJlq5ZHs5IY1gPULwXNe_GFG9o09#scrollTo=jIwW7oxwyZJZ
+```
+
+## Doubts - Tokenizer
+1. Unable to get the training to run efficiently with larger dataset of a GB (out of RAM, page-thrashing). Huggingface does it very effectively. However, the training vocab / merge-list seems to be at unicode char level as opposed to byte level.
+2. Tokenization v/s feature-extraction: understanding the difference. Seems like tokenization is a loss-less feature-extraction relevant to NLP?
+
+
+## Doubts - Model Archtitecture
+1. What are Mixture of Expert LMs and (routing functions and sparse FFNs)
+2. Inverted-bottleneck concept: Why does the FFN expand to 4x dim and then compress as opposed to compress to lower-dim and then expand?
+3. RoPE v/s Absoulte-Learned v/s Sinusoid-Fixed: Why use learned position weights instead of fixed sinusoidal? What motivated fixed sinusoidal in the first place?
+4. What is the intuition for residual connections? Why does pre-norm (having an uninterrupted residual path help learning stability)
+5. What is energy-based models / diffusion / GANs / auto-regressive models?
+6. Validation Loss computation: 
+* Should I sample the entire validation set and split it into non overlapping sets of context-length (sliding window v/s chunking?)
+* How to deal with dropout? Should I use model.eval()?
+
+
 ## Setup
 
 0. Set up a conda environment and install packages:

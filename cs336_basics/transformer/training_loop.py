@@ -8,7 +8,10 @@ import pathlib
 import json
 from typing import List, Tuple
 
-from cs336_basics.transformer.transformer_lm import TransformerModel
+from cs336_basics.transformer.transformer_lm import (
+    TransformerModel,
+    TransformerModelConfig,
+)
 from cs336_basics.transformer.training import (
     cross_entropy_loss,
     AdamW,
@@ -24,12 +27,6 @@ from cs336_basics.transformer.training import (
 from cs336_basics.transformer.training import get_batch, SamplingStrategy
 
 
-# TODO(slinky):
-#   - How should we initilize weights for training, especially for the Position embedding layer and token encoding layer --> randomly.. these are going to be learned too?
-#   - model.vocab_size should be derived from tokenizer? What is the relation between model vocabulary size and tokenizer vocabulary size?
-#       - Currently, I ensure that I post-process the vocab with special tokens and merge-list  after traning and here, I just load
-
-
 def get_tokenizer_vocab_size(args):
     # TODO: Get |vocab_size| from tokenizer.
     dataset_path = pathlib.Path(args.dataset_dir)
@@ -41,18 +38,17 @@ def get_tokenizer_vocab_size(args):
     return vocab_size
 
 
-def initialize_model(args) -> TransformerModel:
-    model = TransformerModel(
-        get_tokenizer_vocab_size(args),
-        int(args.context_length),
-        int(args.num_layers),
-        int(args.d_model),
-        int(args.num_heads),
-        int(args.d_model) * 4,
-        float(args.attn_pdrop),
-        float(args.residual_pdrop),
-    ).to(get_device())
-    return model
+def get_model_config(args) -> TransformerModelConfig:
+    return TransformerModelConfig(
+        vocab_size=get_tokenizer_vocab_size(args),
+        context_length=int(args.context_length),
+        num_layers=int(args.num_layers),
+        d_model=int(args.d_model),
+        num_heads=int(args.num_heads),
+        d_ff=int(args.d_model) * 4,
+        attn_pdrop=float(args.attn_pdrop),
+        residual_pdrop=float(args.residual_pdrop),
+    )
 
 
 def initialize_optimizer(args, model: TransformerModel) -> AdamW:
@@ -106,7 +102,7 @@ def train(args):
     checkpoint_dir = pathlib.Path(args.checkpoint_path).resolve()
 
     # Initialize model and optimizer
-    model = initialize_model(args)
+    model = TransformerModel(get_model_config(args)).to(get_device())
     optimizer = initialize_optimizer(args, model)
 
     # Load from checkpoint if it exists.
@@ -115,16 +111,30 @@ def train(args):
     checkpoint_file = str(checkpoint_dir / (args.name + "_checkpoint.pt"))
     if os.path.exists(checkpoint_file):
         load_state = load_model_checkpoint(str(checkpoint_file), model, optimizer)
-        start_iter = load_state['niters']
+        start_iter = load_state["niters"]
+        print(f"Checkpoint loaded. Resuming training from iteration {start_iter}.")
         # Initialize wandb with the resume option
         if "wandb_config" in load_state and load_state["wandb_config"] is not None:
-            wandb.init(project=load_state["wandb_config"]['project'], 
-                    id=load_state["wandb_config"]['run_id'], 
-                    resume='allow')
-        print(f"Checkpoint loaded. Resuming training from iteration {start_iter}.")
-    else:
-        wandb.init(project=f"cs336-assignment1",
-                   id=f"{args.name}")
+            wandb.init(
+                project=load_state["wandb_config"]["project"],
+                id=load_state["wandb_config"]["run_id"],
+                resume="allow",
+            )
+            print(
+                f"Resuming WandB logging for Project: {load_state['wandb_config']['project']} and RunID:{load_state['wandb_config']['run_id']}"
+            )
+        else:
+            wandb.init(project=f"cs336-assignment1", id=f"{args.name}")
+
+        # Update model with checkpointed config if it exists
+        if (
+            "model_init_config" in load_state
+            and load_state["model_init_config"] is not None
+        ):
+            model = TransformerModel(load_state["model_init_config"])
+            print(
+                f"Reset model to checkpoint config: {load_state['model_init_config']}"
+            )
 
     # Load tokenized training data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
     dataset_path = pathlib.Path(args.dataset_dir)
@@ -196,12 +206,12 @@ def train(args):
                 args, model, training_dataset_mmaped, validation_dataset_mmaped
             )
             log_dict = {
-                    "iteration": niter,
-                    "train_loss": train_loss,
-                    "val_loss": validation_loss,
-                    "grad_norm": curr_gradient_norm,
-                    "learning_rate": lr_now,
-                }
+                "iteration": niter,
+                "train_loss": train_loss,
+                "val_loss": validation_loss,
+                "grad_norm": curr_gradient_norm,
+                "learning_rate": lr_now,
+            }
             wandb.log(log_dict)
             print(log_dict)
 

@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import numpy as np
 import math
 from typing import Optional
+from dataclasses import dataclass
 from .common import get_device
 
 
@@ -190,43 +191,54 @@ class TransformerLayer(nn.Module):
         return output
 
 
+@dataclass
+class TransformerModelConfig:
+    vocab_size: int
+    context_length: int
+    num_layers: int
+    d_model: int
+    num_heads: int
+    d_ff: int
+    attn_pdrop: float
+    residual_pdrop: float
+    name: str = "<un-named>"
+
+
 class TransformerModel(nn.Module):
-    def __init__(
-        self,
-        vocab_size: int,
-        context_length: int,
-        num_layers: int,
-        d_model: int,
-        num_heads: int,
-        d_ff: int,
-        attn_pdrop: float,
-        residual_pdrop: float,
-    ):
+    def __init__(self, config: TransformerModelConfig):
         super().__init__()
-        # Book-keeping
-        self.context_length = context_length
+        # Book-keeping. Used for checkpointing.
+        self.initialization_config = config
 
         # Create transformer layers
         self.layers = nn.ModuleList(
             [
-                TransformerLayer(d_model, num_heads, d_ff, attn_pdrop, residual_pdrop)
-                for _ in range(num_layers)
+                TransformerLayer(
+                    config.d_model,
+                    config.num_heads,
+                    config.d_ff,
+                    config.attn_pdrop,
+                    config.residual_pdrop,
+                )
+                for _ in range(config.num_layers)
             ]
         )
         # We are only using this to extract nn.Param for conveneint weight-loading but not in matrix multiply
         # Note that we are using Learned positional and token encoding matrices, which will be updated during training
-        self.token_embeddings = nn.Linear(d_model, vocab_size, bias=False)
-        self.position_embeddings = nn.Linear(d_model, context_length, bias=False)
-        self.ln_final = RmsNorm(d_model)
+        self.token_embeddings = nn.Linear(config.d_model, config.vocab_size, bias=False)
+        self.position_embeddings = nn.Linear(
+            config.d_model, config.context_length, bias=False
+        )
+        self.ln_final = RmsNorm(config.d_model)
 
         self.lm_head = nn.Linear(
-            d_model, vocab_size, bias=False
+            config.d_model, config.vocab_size, bias=False
         )  # Here, should we keep the bias?
         # Tie the weights with self.token_embeddings
         self.lm_head.weight = self.token_embeddings.weight
 
-        self.embedding_dropout = nn.Dropout(residual_pdrop)
-        self.d_model = d_model
+        self.embedding_dropout = nn.Dropout(config.residual_pdrop)
+        self.d_model = config.d_model
 
     def _get_input_embeddings(self, in_indices: torch.LongTensor) -> torch.FloatTensor:
         """
@@ -272,17 +284,7 @@ class TransformerModel(nn.Module):
 
 
 ############### Accounting for Memory, FLOPs ########################
-from dataclasses import dataclass
 import yaml
-
-
-@dataclass
-class TransformerModelConfiguration:
-    name: str
-    vocab_size: int
-    num_layers: int
-    context_length: int
-    embedding_length: int  # d_model
 
 
 # Accounting of mathmul operations in each Transformer Block:
@@ -301,7 +303,7 @@ class TransformerModelConfiguration:
 # NOTE: The N*[4*L^2*E] Parameter-free FLOPs makes back-prop very powerful since they can be
 #       massively parallelized during training (parameters aren't changing).
 #       These can be made ready while the 6*L*E^2 projections and 16*L*E^2 FFN are being computed!
-def flops_accounting_fpass(conf: TransformerModelConfiguration):
+def flops_accounting_fpass(conf: TransformerModelConfig):
     """
     Prints a breakdown of FLOPs accounting per batch element
     """
@@ -309,17 +311,11 @@ def flops_accounting_fpass(conf: TransformerModelConfiguration):
     #   Assume FFN is a 4x position-wise: Weight matrix is
     #   Key / Query / Value size: E/H
 
-    flops_project_kqv = (
-        6 * conf.context_length * conf.embedding_length * conf.embedding_length
-    )
+    flops_project_kqv = 6 * conf.context_length * conf.d_model * conf.d_model
     # NOTE: It's awesome to have this parameter-free computation sandwiched between param-rich compute
-    flops_self_attention = (
-        4 * conf.context_length * conf.context_length * conf.embedding_length
-    )
-    flops_combine_attentions = (
-        2 * conf.context_length * conf.embedding_length * conf.embedding_length
-    )
-    flops_ffn = 16 * conf.context_length * conf.embedding_length * conf.embedding_length
+    flops_self_attention = 4 * conf.context_length * conf.context_length * conf.d_model
+    flops_combine_attentions = 2 * conf.context_length * conf.d_model * conf.d_model
+    flops_ffn = 16 * conf.context_length * conf.d_model * conf.d_model
     flops_transformer_layer = (
         flops_project_kqv + flops_self_attention + flops_combine_attentions + flops_ffn
     )
@@ -335,7 +331,7 @@ def flops_accounting_fpass(conf: TransformerModelConfiguration):
 
     flops_all_transformer_layer = conf.num_layers * flops_transformer_layer
     flops_token_encode_or_decode = (
-        2 * conf.context_length * conf.embedding_length * conf.vocab_size
+        2 * conf.context_length * conf.d_model * conf.vocab_size
     )
     flops_fpass_total = flops_all_transformer_layer + 2 * flops_token_encode_or_decode
 
@@ -363,10 +359,10 @@ def flops_accounting_fpass(conf: TransformerModelConfiguration):
 #   --------------------
 # Output Gen Layer: E*V --> 1600 * 50k for GPT-2 XL: 80M params: 300MB
 # Memory foot-print: 1.5 billion * 4 bytes = 6 GB
-def params_accounting(conf: TransformerModelConfiguration):
-    params_fnn = 8 * conf.embedding_length * conf.embedding_length
-    params_self_attention = 4 * conf.embedding_length * conf.embedding_length
-    params_encode_decode = conf.embedding_length * conf.vocab_size
+def params_accounting(conf: TransformerModelConfig):
+    params_fnn = 8 * conf.d_model * conf.d_model
+    params_self_attention = 4 * conf.d_model * conf.d_model
+    params_encode_decode = conf.d_model * conf.vocab_size
     params_total = (
         conf.num_layers * (params_fnn + params_self_attention) + params_encode_decode
     )
@@ -384,7 +380,7 @@ def params_accounting(conf: TransformerModelConfiguration):
     return params_total
 
 
-def activations_accounting(conf: TransformerModelConfiguration):
+def activations_accounting(conf: TransformerModelConfig):
     # - activations (A) per batch B:
     #      -  Transformer block
     #           – RMSNorm(s): 2*L*E
@@ -403,13 +399,12 @@ def activations_accounting(conf: TransformerModelConfiguration):
     #       - Cross-entropy on logits: : L*V
     #   Total A = 15*B*L*E*N + 2*B*N*L*L + 2*B*L*V + B*L*E
     actv_transformer = (
-        12 * conf.context_length * conf.embedding_length
+        12 * conf.context_length * conf.d_model
         + 2 * conf.context_length * conf.context_length
     )
     actv_transformer_all = conf.num_layers * actv_transformer
     actv_output_norm = (
-        conf.vocab_size * conf.context_length
-        + conf.embedding_length * conf.context_length
+        conf.vocab_size * conf.context_length + conf.d_model * conf.context_length
     )
     actv_output_loss = conf.vocab_size * conf.context_length
     actv_total = actv_transformer_all + actv_output_norm + actv_output_loss
@@ -433,7 +428,7 @@ def activations_accounting(conf: TransformerModelConfiguration):
 # ---- Total = 2A + 4P = Dominated by 24*B*L*E*N for LLMs
 # Notation: batch_size (B) and the model hyperparameters -- vocab_size (V), context_length (L), num_layers (N),d_model (E)
 # Memory storage for AdamW: Extra 2 * P, where P is number of params for m, v
-def model_training_memory_load(conf: TransformerModelConfiguration, batch_size: int):
+def model_training_memory_load(conf: TransformerModelConfig, batch_size: int):
     # - gradients (params and activations) = (A + P)
     # - optimizer state = 2 * P
     n_activations = activations_accounting(conf) * batch_size
@@ -453,7 +448,7 @@ def model_training_memory_load(conf: TransformerModelConfiguration, batch_size: 
 
 
 def model_training_flops(
-    conf: TransformerModelConfiguration, batch_size: int, training_steps: int
+    conf: TransformerModelConfig, batch_size: int, training_steps: int
 ):
     fpass_flops = flops_accounting_fpass(conf) * batch_size
     bpass_flops = 2 * fpass_flops
@@ -475,12 +470,12 @@ def model_training_flops(
 
 # CS336 assignment 1: adamwAccounting
 def adamwAccounting():
-    gpt2_xl_conf = TransformerModelConfiguration(
+    gpt2_xl_conf = TransformerModelConfig(
         name="GPT-2 XL",
         vocab_size=50257,
         num_layers=48,
         context_length=1024,
-        embedding_length=1600,
+        d_model=1600,
     )
 
     # Similar for forward-pass accounting, memory accounting.

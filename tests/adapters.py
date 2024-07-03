@@ -46,7 +46,7 @@ def run_positionwise_feedforward(
     # my_ffn.w1.weight.data = weights["w1.weight"]
     # my_ffn.w2.weight.data = weights["w2.weight"]
 
-    my_ffn = PositionwiseFeedForward(d_model, d_ff)
+    my_ffn = PositionwiseFeedForward(d_model, d_ff).to(get_device())
     my_ffn.load_state_dict(weights)
     return my_ffn(in_features)
 
@@ -141,7 +141,7 @@ def run_multihead_self_attention(
         torch.FloatTensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    self_attention_layer = CausalMultiheadSelfAttention(d_model, num_heads, attn_pdrop)
+    self_attention_layer = CausalMultiheadSelfAttention(d_model, num_heads, attn_pdrop).to(get_device())
     self_attention_layer.load_state_dict(weights)
     return self_attention_layer.forward(in_features)
 
@@ -239,7 +239,7 @@ def run_transformer_block(
     transformer_block.load_state_dict(weights)
     return transformer_block.forward(in_features)
 
-from cs336_basics.transformer.transformer_lm import TransformerModel
+from cs336_basics.transformer.transformer_lm import TransformerModel, TransformerModelConfig
 def run_transformer_lm(
     vocab_size: int,
     context_length: int,
@@ -332,8 +332,17 @@ def run_transformer_lm(
     """
     # Assert that the weights are tied
     assert torch.equal(weights['lm_head.weight'], weights['token_embeddings.weight'])
-
-    transformer_model = TransformerModel(vocab_size, context_length, num_layers, d_model, num_heads, d_ff, attn_pdrop, residual_pdrop).to(get_device())
+    config = TransformerModelConfig(
+        vocab_size = vocab_size,
+        context_length = context_length,
+        num_layers =num_layers,
+        d_model =d_model,
+        num_heads =num_heads,
+        d_ff =d_ff,
+        attn_pdrop =attn_pdrop,
+        residual_pdrop = residual_pdrop
+    )
+    transformer_model = TransformerModel(config).to(get_device())
     for i in range(num_layers):
         modify_state_dict_for_multihead_transformer_layer(d_model, num_heads, weights, f'layers.{i}.')
     transformer_model.load_state_dict(weights)
@@ -370,7 +379,7 @@ def run_rmsnorm(
         FloatTensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    rmsnorm = RmsNorm(d_model)
+    rmsnorm = RmsNorm(d_model).to(get_device())
     rmsnorm.load_state_dict(weights)
     return rmsnorm.forward(in_features)
 

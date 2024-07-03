@@ -1,6 +1,11 @@
-from .transformer_lm import TransformerModel, softmax
-from ..bpe_tokenizer.encoder_decoder import BpePretrainedTokenizer
+from cs336_basics.transformer.transformer_lm import TransformerModel, softmax
+from cs336_basics.transformer.training import load_model_checkpoint
+from cs336_basics.bpe_tokenizer.encoder_decoder import BpePretrainedTokenizer
 import torch
+import pathlib
+import argparse
+import os
+
 from typing import Dict, List
 
 
@@ -147,27 +152,71 @@ class Decoder:
         return result
 
 
-# Logic to change
-#   1) Add to decoded tokens
-#   2) If self.tokenizer.end_of_text_token, then remove that batch from model_input
-#   3) If model_input has become empty, exit loop
-# NOTE (efficiency for multi-batched): A better way would be to make this a generator of decoded output
-
-# # NOTE: torch.nonzero(mask) is a "hack" to find indices
-# # Each row in the output tensor corresponds to the indices where the condition is true.
-# terminated = torch.nonzero(next_tokens == self.tokenizer.end_of_text_token)
-# # Convert terminated to a tensor of indices to remove
-# indices_terminated = torch.tensor(terminated)
-# # Use torch.index_select() to select rows not in indices_to_remove
-# indices_to_keep = [i for i in range(model_input.shape[0]) if i not in terminated[0,:]]
-# model_input_pruned = torch.index_select(model_input, dim=0, index=indices_terminated)
-# next_tokens_pruned = torch.index_select(next_tokens, dim=0, index=indices_terminated)
+### CLI: Run the decoder from a checkpoint
 
 
-# # Append next tokens to indices_to_keep
-# if
-# breakpoint()
-# if model_input_pruned.numel() == 0:
-#     print("Decoding over.")
-# if indices_terminated.numel() > 0:
-#     print(f"Decoded {indices_terminated.numel()} input prompts!. Remaining: {indices_to_keep.numel()}")
+def create_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Inference from a trained model checkpoint."
+    )
+
+    parser.add_argument(
+        "--tokenizer_dir", type=str, required=True, help="Path to tokenizer."
+    )
+    parser.add_argument(
+        "--checkpoint_file", type=str, required=True, help="Path to checkpoint."
+    )
+    parser.add_argument(
+        "--max_tokens",
+        nargs="?",
+        default=256,
+        help="Stop decoding after these many tokens even if <|endoftext|> token is not reached",
+    )
+    parser.add_argument(
+        "--softmax_temp",
+        nargs="?",
+        default=1.0,
+        help="Lower values would skew probability mass even more towards higher logits.",
+    )
+    parser.add_argument(
+        "--nucleus_p", nargs="?", default=1.0, help="Nucleus sampling threshold"
+    )
+    return parser
+
+
+def main():
+    """
+    Parses CLI args and runs inference
+    """
+
+    args = create_arg_parser().parse_args()
+    breakpoint()
+
+    # Create Tokenizer. We should ensure that this has the same set of special characters as during training.
+    dataset_path = pathlib.Path(args.tokenizer_dir)
+    vocab_path = str(dataset_path / "vocab.json")
+    merge_path = str(dataset_path / "merges.txt")
+    tokenizer = BpePretrainedTokenizer.from_files(
+        vocab_path, merge_path, special_tokens=["<|endoftext|>"]
+    )
+    print(f"Tokenizer Ready.")
+
+    # Initialize model and optimizer
+    checkpoint_file = pathlib.Path(args.checkpoint_file)
+    load_state = load_model_checkpoint(str(checkpoint_file), model, None)
+    model = TransformerModel(load_state["model_init_config"])
+    print(f"Model Ready.")
+
+    # Initialize decoder
+    decoder = Decoder(
+        tokenizer, int(args.max_tokens), float(args.softmax_temp), float(args.nucleus_p)
+    )
+
+    # Run decoder on prompt
+    prompt = ["Once upon a time there was a little dog named Ruby."]
+    output = decoder.decode_prompts(prompt, model)
+    print(output)
+
+
+if __name__ == "__main__":
+    main()

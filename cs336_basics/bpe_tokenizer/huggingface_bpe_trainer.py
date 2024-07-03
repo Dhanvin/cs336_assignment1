@@ -104,9 +104,7 @@ training_file = dataset_name + "-train.txt"
 vocab_size = 10000
 special_tokens = ["<|endoftext|>"]
 train_tokenizer(
-    dataset_path,
-    [str(dataset_path / training_file)],
-    vocab_size,
+    dataset_path, [str(dataset_path / training_file)], vocab_size, special_tokens
 )
 
 
