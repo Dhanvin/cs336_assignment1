@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 import numpy.typing as npt
 import math
+import wandb
 from typing import Optional, IO, BinaryIO
 from collections.abc import Callable, Iterable
 import os
@@ -328,6 +329,10 @@ def save_model_checkpoint(
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),  # Same as optimizer.state_dict()
         "niter": iteration,
+        'wandb_config': {
+            'project': wandb.run.project,
+            'run_id': wandb.run.id,
+        } if wandb.run is not None else None
     }
     torch.save(obj, out)
 
@@ -356,4 +361,6 @@ def load_model_checkpoint(
     obj = torch.load(src)
     model.load_state_dict(obj["model_state"])
     optimizer.load_state_dict(obj["optimizer_state"])
-    return obj["niter"]
+    return {'niters': obj["niter"],
+            'wandb_config': obj['wandb_config']}
+    

@@ -7,6 +7,7 @@ from typing import IO, BinaryIO, Iterable, Optional, Type
 import numpy.typing as npt
 import torch
 
+from cs336_basics.transformer.common import get_device
 
 from cs336_basics.transformer.transformer_lm import PositionwiseFeedForward
 def run_positionwise_feedforward(
@@ -233,7 +234,7 @@ def run_transformer_block(
         FloatTensor of shape (batch_size, sequence_length, d_model) with the output of
         running the Transformer block on the input features.
     """
-    transformer_block = TransformerLayer(d_model, num_heads, d_ff, attn_pdrop, residual_pdrop)
+    transformer_block = TransformerLayer(d_model, num_heads, d_ff, attn_pdrop, residual_pdrop).to(get_device())
     modify_state_dict_for_multihead_transformer_layer(d_model, num_heads, weights)
     transformer_block.load_state_dict(weights)
     return transformer_block.forward(in_features)
@@ -332,7 +333,7 @@ def run_transformer_lm(
     # Assert that the weights are tied
     assert torch.equal(weights['lm_head.weight'], weights['token_embeddings.weight'])
 
-    transformer_model = TransformerModel(vocab_size, context_length, num_layers, d_model, num_heads, d_ff, attn_pdrop, residual_pdrop)
+    transformer_model = TransformerModel(vocab_size, context_length, num_layers, d_model, num_heads, d_ff, attn_pdrop, residual_pdrop).to(get_device())
     for i in range(num_layers):
         modify_state_dict_for_multihead_transformer_layer(d_model, num_heads, weights, f'layers.{i}.')
     transformer_model.load_state_dict(weights)
@@ -557,7 +558,7 @@ def run_load_checkpoint(
     Returns:
         int, the previously-serialized number of iterations.
     """
-    return load_model_checkpoint(src, model, optimizer)
+    return load_model_checkpoint(src, model, optimizer)['niters']
     raise NotImplementedError
 
 from cs336_basics.bpe_tokenizer.encoder_decoder import BpePretrainedTokenizer

@@ -104,19 +104,27 @@ def compute_train_validation_losses(
 
 def train(args):
     checkpoint_dir = pathlib.Path(args.checkpoint_path).resolve()
-    wandb.init(project=f"cs336-train-{args.name}")
 
     # Initialize model and optimizer
     model = initialize_model(args)
     optimizer = initialize_optimizer(args, model)
 
-    # Load model and optimizer state from checkpoint if exists.
+    # Load from checkpoint if it exists.
     start_iter = 1
     checkpoint_dir = pathlib.Path(args.checkpoint_path)
     checkpoint_file = str(checkpoint_dir / (args.name + "_checkpoint.pt"))
     if os.path.exists(checkpoint_file):
-        start_iter = load_model_checkpoint(str(checkpoint_file), model, optimizer)
+        load_state = load_model_checkpoint(str(checkpoint_file), model, optimizer)
+        start_iter = load_state['niters']
+        # Initialize wandb with the resume option
+        if "wandb_config" in load_state and load_state["wandb_config"] is not None:
+            wandb.init(project=load_state["wandb_config"]['project'], 
+                    id=load_state["wandb_config"]['run_id'], 
+                    resume='allow')
         print(f"Checkpoint loaded. Resuming training from iteration {start_iter}.")
+    else:
+        wandb.init(project=f"cs336-assignment1",
+                   id=f"{args.name}")
 
     # Load tokenized training data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
     dataset_path = pathlib.Path(args.dataset_dir)
@@ -170,6 +178,7 @@ def train(args):
         # Backward (compute gradients)
         train_loss.backward()
         gradient_clipping(model.parameters(), float(args.max_gradient_norm))
+        curr_gradient_norm = combined_gradient_norm(model.parameters())
 
         # Finally update model params based on gradient
         optimizer.step()
@@ -186,16 +195,15 @@ def train(args):
             train_loss, validation_loss = compute_train_validation_losses(
                 args, model, training_dataset_mmaped, validation_dataset_mmaped
             )
-            curr_gradient_norm = combined_gradient_norm(model.parameters())
-            wandb.log(
-                {
+            log_dict = {
                     "iteration": niter,
                     "train_loss": train_loss,
                     "val_loss": validation_loss,
                     "grad_norm": curr_gradient_norm,
+                    "learning_rate": lr_now,
                 }
-            )
-            # breakpoint()
+            wandb.log(log_dict)
+            print(log_dict)
 
         # Checkpoint
         if niter % checkpoint_freq == 0:
@@ -233,20 +241,20 @@ def create_arg_parser() -> argparse.ArgumentParser:
     scheduler_cli.add_argument(
         "--lr_min",
         nargs="?",
-        default=1e-3,
-        help="Min learning rate for cosine-scheduler",
+        default=1e-5,
+        help="Min learning rate for cosine-scheduler. 10^-4 is a good default.",
     )
     scheduler_cli.add_argument(
         "--lr_max",
         nargs="?",
-        default=1e-2,
-        help="Max learning rate for cosine-scheduler",
+        default=1e-4,
+        help="Max learning rate for cosine-scheduler. 10^-4 is a good default.",
     )
     scheduler_cli.add_argument(
         "--lr_warmup_iters",
         nargs="?",
-        default=50,
-        help="Warmup iterations for cosine-scheduler",
+        default=500,
+        help="Warmup iterations for cosine-scheduler. 10 percent of iters is a good default",
     )
     scheduler_cli.add_argument(
         "--lr_cosine_nepochs",
