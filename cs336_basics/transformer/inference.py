@@ -1,5 +1,6 @@
 from cs336_basics.transformer.transformer_lm import TransformerModel, softmax
-from cs336_basics.transformer.training import load_model_checkpoint
+from cs336_basics.transformer.training import initialize_model_from_checkpoint
+from cs336_basics.transformer.common import get_device
 from cs336_basics.bpe_tokenizer.encoder_decoder import BpePretrainedTokenizer
 import torch
 import pathlib
@@ -93,8 +94,10 @@ class Decoder:
                 )
                 token_list = token_list[-context_length:]
 
+            # breakpoint()
+
             # The prompt should be the last part of the context_length.
-            model_input[idx, : -len(token_list)] = torch.tensor(token_list[:])
+            model_input[idx, -len(token_list) :] = torch.tensor(token_list[:])
 
         return model_input
 
@@ -102,29 +105,36 @@ class Decoder:
         self, prompts: List[str], transformer: TransformerModel
     ) -> Dict[int, str]:
         batch_size = len(prompts)
-        context_length = transformer.context_length
+        context_length = transformer.initialization_config.context_length
         model_input = self.to_model_input(prompts, context_length)
         assert (batch_size, context_length) == model_input.shape
 
         # Initialize
         terminated_prompts: set = {}
-        output_tokens = Dict[int, List[int]] = {idx: [] for idx in range(len(prompts))}
+        output_tokens: Dict[int, List[int]] = {
+            idx: list() for idx in range(len(prompts))
+        }
 
         # Decode for self.max_tokens steps
         for i in range(self.max_tokens):
             # Run forward pass of transformer to obtain prediction logits
             pred_logits = transformer(model_input)
 
+            # breakpoint()
+
             # For every batch, only consider the last seq element.
+            # pred_logits[:, -1, :] --> (batch_size, vocab_size)
             next_pred_prob = softmax(
-                pred_logits[:, -1, :], d_idx=2, temp=self.softmax_temp
+                pred_logits[:, -1, :], d_idx=1, temp=self.softmax_temp
             )
             next_tokens = nucleus_sampling(
                 next_pred_prob, self.nucleus_sampling_threshold
             )
+            print(f"Generated token {i}: {next_tokens}")
+            # breakpoint()
 
             # Process generated tokens
-            next_token_list = next_tokens.squeeze().tolist()
+            next_token_list = next_tokens.squeeze(dim=1).tolist()
             for prompt_idx, next_token in enumerate(next_token_list):
                 # Skip terminated prompts
                 if prompt_idx in terminated_prompts:
@@ -190,7 +200,6 @@ def main():
     """
 
     args = create_arg_parser().parse_args()
-    breakpoint()
 
     # Create Tokenizer. We should ensure that this has the same set of special characters as during training.
     dataset_path = pathlib.Path(args.tokenizer_dir)
@@ -203,8 +212,7 @@ def main():
 
     # Initialize model and optimizer
     checkpoint_file = pathlib.Path(args.checkpoint_file)
-    load_state = load_model_checkpoint(str(checkpoint_file), model, None)
-    model = TransformerModel(load_state["model_init_config"])
+    model = initialize_model_from_checkpoint(str(checkpoint_file)).to(get_device())
     print(f"Model Ready.")
 
     # Initialize decoder
@@ -213,7 +221,7 @@ def main():
     )
 
     # Run decoder on prompt
-    prompt = ["Once upon a time there was a little dog named Ruby."]
+    prompt = ["Once upon a time there was a little dog."]
     output = decoder.decode_prompts(prompt, model)
     print(output)
 

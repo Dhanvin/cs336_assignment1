@@ -123,9 +123,6 @@ def train(args):
             print(
                 f"Resuming WandB logging for Project: {load_state['wandb_config']['project']} and RunID:{load_state['wandb_config']['run_id']}"
             )
-        else:
-            wandb.init(project=f"cs336-assignment1", id=f"{args.name}")
-
         # Update model with checkpointed config if it exists
         if (
             "model_init_config" in load_state
@@ -135,6 +132,10 @@ def train(args):
             print(
                 f"Reset model to checkpoint config: {load_state['model_init_config']}"
             )
+
+    # Initialize wandb if note yet initialized
+    if wandb.run is None:
+        wandb.init(project=f"cs336-assignment1", id=f"{args.name}")
 
     # Load tokenized training data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
     dataset_path = pathlib.Path(args.dataset_dir)

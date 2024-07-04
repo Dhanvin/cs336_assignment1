@@ -8,6 +8,8 @@ import math
 import wandb
 from typing import Optional, IO, BinaryIO
 from collections.abc import Callable, Iterable
+from cs336_basics.transformer.transformer_lm import TransformerModel
+
 import os
 from enum import Enum
 import random
@@ -346,10 +348,19 @@ def save_model_checkpoint(
     torch.save(obj, out)
 
 
+def initialize_model_from_checkpoint(
+    src: str | os.PathLike | BinaryIO | IO[bytes],
+) -> TransformerModel:
+    obj = torch.load(src, map_location=get_device())
+    model = TransformerModel(obj["model_init_config"])
+    model.load_state_dict(obj["model_state"])
+    return model
+
+
 def load_model_checkpoint(
     src: str | os.PathLike | BinaryIO | IO[bytes],
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
+    model: torch.nn.Module = None,
+    optimizer: torch.optim.Optimizer = None,
 ):
     """
     Given a serialized checkpoint (path or file-like object), restore the

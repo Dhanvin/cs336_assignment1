@@ -114,8 +114,9 @@ class BpePretrainedTokenizer:
             self.regex_list = [re.compile(PRETOKEN_PATTERN)]
 
         # Assumes that the longest sorted special-token is the end-of-text token.
+        self.end_of_text_str = sorted_special_tokens[0]
         self.end_of_text_token = (
-            self.vocab_bytes_to_int[sorted_special_tokens[0].encode("utf-8")]
+            self.vocab_bytes_to_int[self.end_of_text_str.encode("utf-8")]
             if sorted_special_tokens is not None
             else None
         )
@@ -276,63 +277,90 @@ class BpePretrainedTokenizer:
         return utf8_str.decode("utf-8", errors="replace")
 
 
+def tokenize_dataset(data_file: str, tokenized_file: str):
+    print(f"Tokenizing {data_file} --> {tokenized_file}")
+    all_ids: List[int] = []
+    start_t = timeit.default_timer()
+    with open(data_file) as f:
+        for _id in tokenizer.encode_iterable(f):
+            all_ids.append(_id)
+    file_size = data_file.stat().st_size
+    end_t = timeit.default_timer()
+    MBps = file_size / (float(end_t - start_t) * 1024.0 * 1024.0)
+
+    # Output efficiency stats
+    print(f"BPE: Bytes per token: {file_size / float(len(all_ids)): .2f}")
+    print(f"Throughput ratio: {MBps: .2f} MB/s")
+    np.save(tokenized_file, np.array(all_ids, dtype=np.uint16))
+    tokenized_file_size = tokenized_file.stat().st_size
+    print(f"Absolute compression ratio: {file_size / float(tokenized_file_size): .2f}")
+
+
 import timeit
 import numpy as np
-from cs336_basics.transformer.training import get_batch
+from argparse import ArgumentParser
+from cs336_basics.transformer.training import get_batch, SamplingStrategy
 
 # python -m cs336_basics.bpe_tokenizer.encoder_decoder
 if __name__ == "__main__":
+    OVERWRITE_TOKEN_FILES = False
     dataset_name = "TinyStoriesV2-GPT4"
     DATASET_DIR = (
         (pathlib.Path(__file__).resolve()).parent.parent.parent / "data" / dataset_name
     )
+    special_token_list = ["<|endoftext|>"]
 
     # Create Tokenizer. We should ensure that this has the same set of special characters as during training.
     vocab_path = str(DATASET_DIR / "vocab.json")
     merge_path = str(DATASET_DIR / "merges.txt")
     tokenizer = BpePretrainedTokenizer.from_files(
-        vocab_path, merge_path, special_tokens=["<|endoftext|>"]
+        vocab_path, merge_path, special_tokens=special_token_list
     )
+    assert (
+        tokenizer.end_of_text_token is not None
+    ), "ERROR: No End-of-Text token found in tokenizer"
 
-    # >> Setup for testing is slightly different since vocab / merges files may live elsewhere
-    # DATASET_DIR = (
-    #     (pathlib.Path(__file__).resolve()).parent.parent.parent / "tests" / "fixtures"
-    # )
-    # DATA_FILE = DATASET_DIR / "tinystories_sample_5M.txt"
-    # TOKENIZED_FILE = DATASET_DIR / (DATA_FILE.stem + "-tokens.npy")
+    # Encode train and validation files using Tokenizer. Save serialized uint16 numpy array of tokens
+    DATA_FILE_TRAIN = DATASET_DIR / "TinyStoriesV2-GPT4-train.txt"
+    TOKENIZED_FILE_TRAIN = DATASET_DIR / (DATA_FILE_TRAIN.stem + "-tokens.npy")
+    if not TOKENIZED_FILE_TRAIN.exists() or OVERWRITE_TOKEN_FILES:
+        tokenize_dataset(DATA_FILE_TRAIN, TOKENIZED_FILE_TRAIN)
+    else:
+        print(f"Skipping: {TOKENIZED_FILE_TRAIN} already exists")
 
-    # Encode a file using Tokenizer. Save serialized uint16 numpy array of tokens
-    DATA_FILE = DATASET_DIR / "TinyStoriesV2-GPT4-valid.txt"
-    TOKENIZED_FILE = DATASET_DIR / (DATA_FILE.stem + "-tokens.npy")
-    all_ids: List[int] = []
-    start_t = timeit.default_timer()
+    DATA_FILE_VALIDATION = DATASET_DIR / "TinyStoriesV2-GPT4-valid.txt"
+    TOKENIZED_FILE_VALIDATION = DATASET_DIR / (
+        DATA_FILE_VALIDATION.stem + "-tokens.npy"
+    )
+    if not TOKENIZED_FILE_VALIDATION.exists() or OVERWRITE_TOKEN_FILES:
+        tokenize_dataset(DATA_FILE_VALIDATION, TOKENIZED_FILE_VALIDATION)
+    else:
+        print(f"Skipping: {TOKENIZED_FILE_VALIDATION} already exists")
 
-    if not TOKENIZED_FILE.exists():
-        with open(DATA_FILE) as f:
-            for _id in tokenizer.encode_iterable(f):
-                all_ids.append(_id)
-        file_size = DATA_FILE.stat().st_size
-        end_t = timeit.default_timer()
-        MBps = file_size / (float(end_t - start_t) * 1024.0 * 1024.0)
-
-        # Output efficiency stats
-        print(f"BPE: Bytes per token: {file_size / float(len(all_ids)): .2f}")
-        print(f"Throughput ratio: {MBps: .2f} MB/s")
-        np.save(TOKENIZED_FILE, np.array(all_ids, dtype=np.uint16))
-        tokenized_file_size = TOKENIZED_FILE.stat().st_size
-        print(
-            f"Absolute compression ratio: {file_size / float(tokenized_file_size): .2f}"
-        )
+    # Sanity-check for tokenizer.end_of_text_token by sampling a small batch and counting number of string occurrances
+    tokenized_dataset_mmaped = np.load(TOKENIZED_FILE_VALIDATION, mmap_mode="r+")
+    assert tokenized_dataset_mmaped.dtype == np.uint16
+    batch = get_batch(
+        tokenized_dataset_mmaped,
+        batch_size=32,
+        context_length=128,
+        device="cpu",
+        strategy=SamplingStrategy.SEQ_NON_OVERLAPPING,
+    )
+    batchwise_token_lists = batch[0].tolist()
+    endoftext_str_count = 0
+    endoftext_token_count = 0
+    for l in batchwise_token_lists:
+        decoded_str = tokenizer.decode(l)
+        endoftext_str_count += decoded_str.count(tokenizer.end_of_text_str)
+        endoftext_token_count += l.count(tokenizer.end_of_text_token)
+    assert endoftext_str_count > 0, "Increase batch size and recheck"
+    assert (
+        endoftext_str_count == endoftext_token_count
+    ), "Token count should match string count"
 
     ### Tinystories:
     # Compression-ratio (bytes / tokens) 4.15 --> We can get a byte-compression of 2x if stored as uint16 (each token < 65k)
     # Throughput-ratio: 1.65 MB/s or 6 GB/hr
 
     # Load tokenized data. We use Unix's memory mapped mode and create a writeable array which can be converted to torch.tensors
-    tokenized_dataset_mmaped = np.load(TOKENIZED_FILE, mmap_mode="r+")
-    assert tokenized_dataset_mmaped.dtype == np.uint16
-    for i in range(10):
-        batch = get_batch(
-            tokenized_dataset_mmaped, batch_size=32, context_length=128, device="cpu"
-        )
-        print(batch)

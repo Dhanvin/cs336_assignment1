@@ -597,7 +597,6 @@ def get_tokenizer(
     return BpePretrainedTokenizer(vocab, merges, special_tokens)
 
 from cs336_basics.bpe_tokenizer.fast_singlethread_tokenizer import train_bpe_from_file
-from cs336_basics.bpe_tokenizer.file_based_multithread_tokenizer import CorpusPretokenizer, BpeTokenizerFileBasedTrainer, PRETOKEN_PATTERN
 import pathlib
 def run_train_bpe(
     input_path: str | os.PathLike,
@@ -634,20 +633,5 @@ def run_train_bpe(
         vocab_size=500,
         special_tokens=["<|endoftext|>"],
     )
-
-    ## NOTE: Since pytest is single-threaded, BpeTokenizerFileBasedTrainer will run extremely slowly. 
-    # Most time is spent acquiring locks
-
-    # corpus_path = pathlib.Path(input_path).resolve()
-    # corpus_pretokenizer = CorpusPretokenizer.create_new(corpus_path, PRETOKEN_PATTERN)
-    # corpus_pretokenizer.build()
-    # bpe_file_based_trainer = BpeTokenizerFileBasedTrainer(corpus_pretokenizer)
-    # num_merges = vocab_size -len(bpe_file_based_trainer.vocab_set) - len(special_tokens)
-    # for i in range(num_merges):
-    #     bpe_file_based_trainer.train_one_step()
-    # bpe_file_based_trainer.add_special_tokens_to_vocab(special_tokens)
-    # # Print profiling results
-    # return (bpe_file_based_trainer.vocab_set, bpe_file_based_trainer.merge_list)
-
 
     raise NotImplementedError
