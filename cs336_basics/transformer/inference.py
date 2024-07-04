@@ -110,7 +110,7 @@ class Decoder:
         assert (batch_size, context_length) == model_input.shape
 
         # Initialize
-        terminated_prompts: set = {}
+        terminated_prompts = set()
         output_tokens: Dict[int, List[int]] = {
             idx: list() for idx in range(len(prompts))
         }
