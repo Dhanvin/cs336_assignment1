@@ -7,12 +7,20 @@ If you see any issues with the assignment handout or code, please feel free to
 raise a GitHub issue or open a pull request with a fix.
 
 ## An example generated prompt:
-```
-{0: ' In the a a small dog, meat. The sky was broken to wheels that all vis brightly to the toy. He fly to a very high in the window. They loved to play together. The house gave open bright, and Tim would turn warm inside. One day, Tim saw a small door. The door was shiny, and the light box would.\nTim went inside the house to look. He gazed at the flashlight and blinked at the flashlight. It smiled and had a big smile as Tim played with the flashlight on it. From that day on, Tim made sure everything would be fun to happen.\nOne day, Tim met a new friend Sue the house in her house. She had each red gears and small blue pants could shoot things too. Tim smiled and said, "How a veryFor my friend Tom."\n"I don\'t know, Tim. If you moved away, you have no hats and tails to crash," said Tim, licking. "You need to keep me safe to find each other and see where toys looks here before we play, solve cat and toy bugs. We can see if we start."\nTim was excited and understood. He remembered his eyes and thought fire were not a toy near the house. He wanted Tim to listen to her and make him happy. Tim remembered being a good friend. He also played and chew with Anna. One time, they played a new teddy bear together. Tim went to its mom and took off. He had a soft heart and a name and a nice pair named Jerry was playing with a dragon as a dragon dragon and many sharp ball.\nSadly, while they both talked and played with a long horn, Lily took off Zip\'s shiny toy. Max and Laser laughed, and it rocked even higher, and again. They became the best of friends and played every day.\n<|endoftext|>'}
-```
-on `https://wandb.ai/dhanvin_personal/cs336-assignment1/runs/sp_token_lr_1e-3_ramp_1k?nw=nwuserdhanvinm`
+> The park was big and full of fun.\nOne day, a girl named Lily was playing with her mom and dad. They were going to the park to have a picnic. Lily was very happy. She saw a big tree with a big branch. She wanted to climb it and see the world below.\nAs Lily climbed the tree, she saw a little bird. The bird was sad and alone. Lily wanted to help the bird, so she gave her mom a big hug. She gave the bird some food and a treat. The bird ate the treat and felt better.\nThe next day, Lily and her mom went to the park. They saw a big tree with a hole in it. Lily said, "Mom, can we get a treat?" Her mom said, "Yes, we can get a treat from the tree. We can get a treat." They went to the tree and got a big, yummy treat. Lily was so happy! She thanked her mom and dad for their help. They went home and Lily\'s mom made a yummy treat for the rest of the day.\n<|endoftext|>'
 
-2.6k iterations
+Training log: [WandB](https://wandb.ai/dhanvin_personal/cs336-assignment1/runs/sp_2e-3_ramp_1k_pdrop_e-1_batch_64?nw=nwuserdhanvinm)
+| Stat         | Value          |
+|--------------|----------------|
+| iteration    | 4400           |
+| learning_rate| 0.002          |
+| train_loss   | 1.68591        |
+| val_loss     | 1.62117        |
+
+[Model checkpoint](./model_checkpoints/sp_2e-3_ramp_1k_pdrop_e-1_batch_64_checkpoint.pt)
+
+See Step 6 in the [How to run](#how-to-run) section to generate more text.
+ 
 
 ## Experiments
 Logs for Training Runs:
@@ -23,7 +31,8 @@ https://colab.research.google.com/drive/15ZoEOJlq5ZHs5IY1gPULwXNe_GFG9o09#scroll
 * It's hard to tell from validation loss whether something has converged.
 * What are good eval metrics for generated text?
 
-## Instructions for running end-to-end (Tokenizer, Model Training, Inference):
+## How to run:
+Instructions for running Tokenizer, Model Training, Inference end-to-end
 1. BPE Tokenizer Training using Huggingface. Be sure to add <|endoftext|> as special token during training (see [tokenizer-training code](./cs336_basics/bpe_tokenizer/huggingface_bpe_trainer.py)). Ensure we have the right "dataset_name".
 ``` sh
 python cs336_basics/bpe_tokenizer/huggingface_bpe_trainer.py

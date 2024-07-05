@@ -221,7 +221,7 @@ def main():
     )
 
     # Run decoder on prompt
-    prompt = ["Once upon a time there was a little dog."]
+    prompt = ["Once upon a time there was a little dog Taffy who was very fond of food. Her trainer Lily would give treats every time they went to the park"]
     output = decoder.decode_prompts(prompt, model)
     print(output)
 
