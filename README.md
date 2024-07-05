@@ -7,7 +7,24 @@ If you see any issues with the assignment handout or code, please feel free to
 raise a GitHub issue or open a pull request with a fix.
 
 ## An example generated prompt:
+Prompt:
+> "Once upon a time there was a little dog Taffy who was very fond of food. Her trainer Lily would give treats every time they went to the park"
+
+Generation:
 > The park was big and full of fun.\nOne day, a girl named Lily was playing with her mom and dad. They were going to the park to have a picnic. Lily was very happy. She saw a big tree with a big branch. She wanted to climb it and see the world below.\nAs Lily climbed the tree, she saw a little bird. The bird was sad and alone. Lily wanted to help the bird, so she gave her mom a big hug. She gave the bird some food and a treat. The bird ate the treat and felt better.\nThe next day, Lily and her mom went to the park. They saw a big tree with a hole in it. Lily said, "Mom, can we get a treat?" Her mom said, "Yes, we can get a treat from the tree. We can get a treat." They went to the tree and got a big, yummy treat. Lily was so happy! She thanked her mom and dad for their help. They went home and Lily\'s mom made a yummy treat for the rest of the day.\n<|endoftext|>'
+
+
+Training Config (used L4 GPU):
+| Parameter               | Value      |
+|-------------------------|------------|
+| training_batch_size     | 64         |
+| total_train_tokens      | 327680000  |
+| eval_batch_size         | 256        |
+| lr_max                  | 2e-3       |
+| lr_min                  | 2e-4       |
+| lr_warmup_iters         | 1000       |
+| attn_pdrop              | 0.1        |
+| residual_pdrop          | 0.1        |
 
 Training log: [WandB](https://wandb.ai/dhanvin_personal/cs336-assignment1/runs/sp_2e-3_ramp_1k_pdrop_e-1_batch_64?nw=nwuserdhanvinm)
 | Stat         | Value          |
@@ -17,9 +34,24 @@ Training log: [WandB](https://wandb.ai/dhanvin_personal/cs336-assignment1/runs/s
 | train_loss   | 1.68591        |
 | val_loss     | 1.62117        |
 
-[Model checkpoint](./model_checkpoints/sp_2e-3_ramp_1k_pdrop_e-1_batch_64_checkpoint.pt)
+[Model checkpoint](https://drive.google.com/file/d/1Y-OVvd8tXotJofoZDZ726BNIuqlQS4WZ/view?usp=drive_link)
 
-See Step 6 in the [How to run](#how-to-run) section to generate more text.
+Command:
+```
+!python cs336_basics/transformer/training_loop.py \
+--name='sp_2e-3_ramp_1k_pdrop_e-1_batch_64' --dataset_dir='/content/drive/My Drive/cs336_assignment1/data/TinyStoriesV2-GPT4' \
+--checkpoint_path='/content/drive/My Drive/cs336_assignment1/checkpoints/' \
+--training_batch_size=64 \
+--total_train_tokens=327680000 \
+--eval_batch_size=256 \
+--lr_max=2e-3 \
+--lr_min=2e-4 \
+--lr_warmup_iters=1000 \
+--attn_pdrop=0.1 \
+--residual_pdrop=0.1
+```
+
+To generate more, see step 6 in the [How to run](#how-to-run) section to generate more text.
  
 
 ## Experiments
